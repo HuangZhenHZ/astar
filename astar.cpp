@@ -14,6 +14,81 @@ constexpr double kXyGridSize = 5;
 constexpr double kThetaGridSize = 0.15;
 
 constexpr double kEps = 1e-6;
+constexpr double kInf = 1e60;
+
+struct DistanceMap {
+	int x_grid_num, y_grid_num;
+	int goal_x_idx, goal_y_idx;
+	std::vector<std::vector<bool>> obstacle_map;
+	std::vector<std::vector<double>> distance_map;
+
+	void InitSize(int n, int m) {
+		x_grid_num = n;
+		y_grid_num = m;
+		obstacle_map.clear();
+		obstacle_map.resize(x_grid_num);
+		for (int i = 0; i < x_grid_num; ++i) {
+			obstacle_map[i].resize(y_grid_num);
+			for (int j = 0; j < y_grid_num; ++j) {
+				obstacle_map[i][j] = false;
+			}
+		}
+	}
+
+	struct State {
+		int x, y;
+		double dis;
+		State(int x, int y, double dis): x(x), y(y), dis(dis) {}
+		bool operator< (const State &that) const {
+			return dis > that.dis;
+		}
+	};
+
+	static constexpr int dx[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+	static constexpr int dy[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+
+	void Dijkstra() {
+		std::priority_queue<State> q;
+		while (!q.empty()) {
+			q.pop();
+		}
+		distance_map.clear();
+		distance_map.resize(x_grid_num);
+		for (int i = 0; i < x_grid_num; ++i) {
+			distance_map[i].resize(y_grid_num);
+			for (int j = 0; j < y_grid_num; ++j) {
+				distance_map[i][j] = kInf;
+			}
+		}
+		assert(!obstacle_map[goal_x_idx][goal_y_idx]);
+		distance_map[goal_x_idx][goal_y_idx] = 0.0;
+		q.push(State(goal_x_idx, goal_y_idx, 0.0));
+
+		while (!q.empty()) {
+			State state = q.top();
+			q.pop();
+			if (state.dis != distance_map[state.x][state.y]) {
+				continue;
+			}
+			for (int i = 0; i < 8; ++i) {
+				int nx = state.x + dx[i];
+				int ny = state.y + dy[i];
+				if (nx < 0 || nx >= x_grid_num || ny < 0 || ny >= y_grid_num) {
+					continue;
+				}
+				if (obstacle_map[nx][ny]) {
+					continue;
+				}
+				double ndis = state.dis + sqrt(dx[i] * dx[i] + dy[i] * dy[i]);
+				if (ndis >= distance_map[nx][ny]) {
+					continue;
+				}
+				distance_map[nx][ny] = ndis;
+				q.push(State(nx, ny, ndis));
+			}
+		}
+	}
+};
 
 struct CarState {
 	Vec position, direction;
@@ -82,6 +157,28 @@ struct Solver {
 	CarState start_state_, final_state_;
 	double w_, h_;
 	int final_id = -1;
+	DistanceMap distance_map_;
+	
+	void InitDistanceMap() {
+		int x_grid_num = static_cast<int>(w_ / kXyGridSize) + 1;
+		int y_grid_num = static_cast<int>(h_ / kXyGridSize) + 1;
+		distance_map_.InitSize(x_grid_num, y_grid_num);
+		for (int i = 0; i < x_grid_num; ++i) {
+			for (int j = 0; j < y_grid_num; ++j) {
+				double x = (i + 0.5) * kXyGridSize;
+				double y = (j + 0.5) * kXyGridSize;
+				Box box(Vec(x,y), 0.0, kXyGridSize * 2, kXyGridSize * 2);
+				if (HasCollision(box)) {
+					distance_map_.obstacle_map[i][j] = true;
+					DrawBox(box);
+				}
+			}
+		}
+		AStarState final_state(final_state_);
+		distance_map_.goal_x_idx = final_state.x_grid;
+		distance_map_.goal_y_idx = final_state.y_grid;
+		distance_map_.Dijkstra();
+	}
 
 	bool IsGoalReached(const CarState &state) const {
 		return abs(state.position.x - final_state_.position.x) <= kXyGridSize &&
@@ -93,27 +190,37 @@ struct Solver {
 		return 0 < state.position.x && state.position.x < w_ &&
 		       0 < state.position.y && state.position.y < h_;
 	}
-
-	bool HasCollision(const CarState &state) const {
-		Box carbox = state.CarBox();
+	
+	bool HasCollision(const Box &box) const {
 		for (const auto &seg : segs_) {
-			if (carbox.HasOverlapWith(seg)) {
+			if (box.HasOverlapWith(seg)) {
 				return true;
 			}
 		}
 		return false;
 	}
 
+	bool HasCollision(const CarState &state) const {
+		Box carbox = state.CarBox();
+		return HasCollision(carbox);
+	}
+
 	double ComputeH(const CarState &state) const {
 		Vec p = final_state_.position - state.position;
 		double x = Dot(state.direction, p);
 		double y = Cross(state.direction, p);
-		return rs::GetMinDis(x * kMaxCurvature, y * kMaxCurvature, final_state_.heading - state.heading) / kMaxCurvature * 1.05;
-
+		double h1 = rs::GetMinDis(x * kMaxCurvature, y * kMaxCurvature, final_state_.heading - state.heading) / kMaxCurvature;
+		
+		AStarState astar_state(state);
+		double h2 = distance_map_.distance_map[astar_state.x_grid][astar_state.y_grid] * kXyGridSize;
+		
+		return std::max(h1, h2);
+		/*
 		const double dist = (state.position - final_state_.position).Length();
 		double heading_change = abs(state.heading - final_state_.heading);
 		heading_change = std::min(heading_change, k2PI - heading_change);
 		return std::max(dist, heading_change / kMaxCurvature);
+		*/
 	}
 
 	bool qc_[350][200][70];
@@ -130,6 +237,7 @@ struct Solver {
 	}
 
 	bool Solve() {
+		InitDistanceMap();
 		memset(qc_, 0, sizeof(qc_));
 		while (!q_.empty()) {
 			q_.pop();
@@ -189,7 +297,7 @@ struct Solver {
 	void Draw() {
 		Vec last_point(100.0, 100.0);
 		for (int id = final_id; id >= 0; id = states_[id].from_id) {
-			printf("%d %lf\n", id, states_[id].h_cost);
+			printf("%d %lf %lf\n", id, states_[id].h_cost, distance_map_.distance_map[states_[id].x_grid][states_[id].y_grid]);
 			DrawBox(states_[id].CarBox());
 			if (id != final_id) {
 				segments_to_draw.push_back(Segment(last_point, states_[id].position));
