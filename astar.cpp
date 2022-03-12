@@ -1,0 +1,256 @@
+#include <SFML/Graphics.hpp>
+#include <queue>
+#include "h.hpp"
+#include "rs.hpp"
+
+constexpr double kCarWidth = 22.0;
+constexpr double kRaToFront = 40.0;
+constexpr double kRaToRear = 10.0;
+constexpr double kCarLength = kRaToFront + kRaToRear;
+constexpr double kRaToCenter = kCarLength * 0.5 - kRaToRear;
+constexpr double kMaxCurvature = 1.0 / 50.0;
+
+constexpr double kXyGridSize = 5;
+constexpr double kThetaGridSize = 0.15;
+
+constexpr double kEps = 1e-6;
+
+struct CarState {
+	Vec position, direction;
+	double heading;
+	CarState(): position(0.0, 0.0), direction(0.0, 0.0), heading(0.0) {}
+
+	Box CarBox() const {
+		Vec center = position + direction * kRaToCenter;
+		return Box(center, heading, kCarLength, kCarWidth);
+	}
+};
+
+CarState Trans(const CarState &from_state, double signed_curvature, double signed_distance) {
+	/*
+	double heading_change = signed_curvature * signed_distance;
+	next_state.heading = NormalizeAngle(from_state.heading + heading_change);
+	next_state.direction = Vec::Direction(next_state.heading);
+	next_state.position = from_state.position + Vec::Direction((from_state.heading + next_state.heading) * 0.5) * signed_distance;
+	return next_state;
+	*/
+
+	CarState next_state;
+	double heading_change = signed_curvature * signed_distance;
+	next_state.heading = NormalizeAngle(from_state.heading + heading_change);
+	next_state.direction = Vec::Direction(next_state.heading);
+	if (abs(heading_change) < kEps) {
+		next_state.position = from_state.position + from_state.direction * signed_distance;
+		return next_state;
+	}
+	double signed_radius = 1.0 / signed_curvature;
+	next_state.position = from_state.position + from_state.direction * signed_radius * sin(heading_change)
+	                      + from_state.direction.Rotate90() * signed_radius * (1 - cos(heading_change));
+	return next_state;
+}
+
+struct AStarState : CarState {
+	int x_grid, y_grid, theta_grid;
+	double g_cost, h_cost, total_cost;
+	int id, from_id;
+
+	AStarState (const CarState &state): CarState(state) {
+		x_grid = static_cast<int>(state.position.x / kXyGridSize);
+		y_grid = static_cast<int>(state.position.y / kXyGridSize);
+		theta_grid = static_cast<int>((state.heading + kPI) / kThetaGridSize);
+		g_cost = h_cost = total_cost = 0.0;
+	}
+};
+
+bool operator> (const AStarState &a, const AStarState &b) {
+	return a.total_cost > b.total_cost;
+}
+
+std::vector<Segment> segments_to_draw;
+
+void DrawBox(Box box) {
+	std::vector<Vec> corners = box.GetCorners();
+	for (int i = 0; i < 4; ++i) {
+		segments_to_draw.push_back(Segment(corners[i], corners[(i + 1) % 4]));
+	}
+}
+
+struct Solver {
+	std::priority_queue<AStarState, std::vector<AStarState>, std::greater<AStarState>> q_;
+	std::vector<AStarState> states_;
+	std::vector<Segment> segs_;
+	CarState start_state_, final_state_;
+	double w_, h_;
+	int final_id = -1;
+
+	bool IsGoalReached(const CarState &state) const {
+		return abs(state.position.x - final_state_.position.x) <= kXyGridSize &&
+		       abs(state.position.y - final_state_.position.y) <= kXyGridSize &&
+		       abs(state.heading - final_state_.heading) <= kThetaGridSize;
+	}
+
+	bool IsInRange(const CarState &state) const {
+		return 0 < state.position.x && state.position.x < w_ &&
+		       0 < state.position.y && state.position.y < h_;
+	}
+
+	bool HasCollision(const CarState &state) const {
+		Box carbox = state.CarBox();
+		for (const auto &seg : segs_) {
+			if (carbox.HasOverlapWith(seg)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	double ComputeH(const CarState &state) const {
+		Vec p = final_state_.position - state.position;
+		double x = Dot(state.direction, p);
+		double y = Cross(state.direction, p);
+		return rs::GetMinDis(x * kMaxCurvature, y * kMaxCurvature, final_state_.heading - state.heading) / kMaxCurvature * 1.05;
+
+		const double dist = (state.position - final_state_.position).Length();
+		double heading_change = abs(state.heading - final_state_.heading);
+		heading_change = std::min(heading_change, k2PI - heading_change);
+		return std::max(dist, heading_change / kMaxCurvature);
+	}
+
+	bool qc_[350][200][70];
+
+	void TryPush(AStarState& state, int from_id) {
+		if (qc_[state.x_grid][state.y_grid][state.theta_grid]) {
+			return;
+		}
+		state.id = states_.size();
+		state.from_id = from_id;
+		qc_[state.x_grid][state.y_grid][state.theta_grid] = true;
+		q_.push(state);
+		states_.push_back(state);
+	}
+
+	bool Solve() {
+		memset(qc_, 0, sizeof(qc_));
+		while (!q_.empty()) {
+			q_.pop();
+		}
+		AStarState start_state(start_state_);
+		start_state.h_cost = ComputeH(start_state_);
+		start_state.total_cost = start_state.g_cost + start_state.h_cost;
+		TryPush(start_state, -1);
+
+		int cnt = 0;
+
+		while (!q_.empty()) {
+			AStarState state = q_.top();
+			q_.pop();
+			/*
+			if (IsGoalReached(state)) {
+				printf("cnt = %d\n", cnt);
+				final_id = state.id;
+				return true;
+			}
+			*/
+			cnt++;
+			// printf("%d %d %d\n", state.x_grid, state.y_grid, state.theta_grid);
+			// segments_to_draw.push_back(Segment(state.position, state.position + state.direction * 5.0));
+
+			constexpr double kStepLength = kXyGridSize * 1.5;
+
+			for (int i = -1; i <= 1; ++i) {
+				for (int j = 1; j >= -1; j -= 2) {
+					CarState next_car_state = Trans(state, i * kMaxCurvature, j * kStepLength);
+					if (!IsInRange(next_car_state)) {
+						continue;
+					}
+					if (HasCollision(next_car_state)) {
+						continue;
+					}
+					AStarState next_astar_state(next_car_state);
+					next_astar_state.g_cost = state.g_cost + kStepLength;
+					next_astar_state.h_cost = ComputeH(next_car_state);
+					next_astar_state.total_cost = next_astar_state.g_cost + next_astar_state.h_cost;
+					TryPush(next_astar_state, state.id);
+
+					if (IsGoalReached(next_astar_state)) {
+						printf("cnt = %d\n", cnt);
+						final_id = next_astar_state.id;
+						return true;
+					}
+				}
+			}
+		}
+
+		printf("cnt = %d\n", cnt);
+
+		return false;
+	}
+
+	void Draw() {
+		Vec last_point(100.0, 100.0);
+		for (int id = final_id; id >= 0; id = states_[id].from_id) {
+			printf("%d %lf\n", id, states_[id].h_cost);
+			DrawBox(states_[id].CarBox());
+			if (id != final_id) {
+				segments_to_draw.push_back(Segment(last_point, states_[id].position));
+			}
+			last_point = states_[id].position;
+		}
+	}
+
+} solver;
+
+int main() {
+	sf::Clock clock;
+	sf::Time elapsed0 = clock.getElapsedTime();
+	printf("%f\n", elapsed0.asSeconds());
+
+	solver.w_ = 1600;
+	solver.h_ = 900;
+	solver.start_state_.position = Vec(200, 200);
+	solver.start_state_.heading = 0.0;
+	solver.start_state_.direction = Vec::Direction(solver.start_state_.heading);
+	solver.final_state_.position = Vec(1400, 600);
+	solver.final_state_.heading = 2.0;
+	solver.final_state_.direction = Vec::Direction(solver.final_state_.heading);
+	// std::swap(solver.start_state_, solver.final_state_);
+	// std::swap(solver.start_state_, solver.final_state_);
+
+	solver.segs_.push_back(Segment(Vec(600, 200), Vec(600, 900)));
+	solver.segs_.push_back(Segment(Vec(800, 0), Vec(800, 700)));
+
+	printf("%d\n", (int)solver.Solve());
+	solver.Draw();
+
+	for (const auto seg : solver.segs_) {
+		segments_to_draw.push_back(seg);
+	}
+
+	sf::Time elapsed1 = clock.getElapsedTime();
+	printf("%f\n", elapsed1.asSeconds());
+
+	sf::RenderWindow window(sf::VideoMode(1600, 900), "HZ", sf::Style::Titlebar | sf::Style::Close);
+	window.setVerticalSyncEnabled(true);
+
+	while (window.isOpen()) {
+		sf::Event event;
+		while (window.pollEvent(event)) {
+			if (event.type == sf::Event::Closed) {
+				window.close();
+			}
+		}
+
+		window.clear();
+
+		for (auto seg : segments_to_draw) {
+			sf::Vertex line[] = {
+				sf::Vertex(sf::Vector2f(seg.a.x, seg.a.y)),
+				sf::Vertex(sf::Vector2f(seg.b.x, seg.b.y))
+			};
+			window.draw(line, 2, sf::Lines);
+		}
+
+		window.display();
+	}
+	return 0;
+}
