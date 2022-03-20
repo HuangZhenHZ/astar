@@ -2,6 +2,7 @@
 #include <queue>
 #include "h.hpp"
 #include "rs.hpp"
+#include "draw.hpp"
 
 constexpr double kCarWidth = 22.0;
 constexpr double kRaToFront = 40.0;
@@ -16,7 +17,7 @@ constexpr double kThetaGridSize = 0.15;
 constexpr double kEps = 1e-6;
 constexpr double kInf = 1e60;
 
-std::vector<Segment> segments_to_draw;
+DrawHelper draw_helper;
 
 struct DistanceMap {
 	int x_grid_num, y_grid_num;
@@ -52,7 +53,7 @@ struct DistanceMap {
 		void DrawFrom() const {
 			Vec point1((from_x + 0.5) * kXyGridSize, (from_y + 0.5) * kXyGridSize);
 			Vec point2((x + 0.5) * kXyGridSize, (y + 0.5) * kXyGridSize);
-			segments_to_draw.push_back(Segment(point1, point2));
+			draw_helper.Push(Segment(point1, point2));
 		}
 	};
 
@@ -179,7 +180,7 @@ bool operator> (const AStarState &a, const AStarState &b) {
 void DrawBox(Box box) {
 	std::vector<Vec> corners = box.GetCorners();
 	for (int i = 0; i < 4; ++i) {
-		segments_to_draw.push_back(Segment(corners[i], corners[(i + 1) % 4]));
+		draw_helper.Push(Segment(corners[i], corners[(i + 1) % 4]));
 	}
 }
 
@@ -336,7 +337,7 @@ struct Solver {
 			printf("%d %lf %lf\n", id, states_[id].h_cost, distance_map_.distance_map[states_[id].x_grid][states_[id].y_grid]);
 			// DrawBox(states_[id].CarBox());
 			if (id != final_id) {
-				segments_to_draw.push_back(Segment(last_point, states_[id].position));
+				draw_helper.Push(Segment(last_point, states_[id].position));
 			}
 			last_point = states_[id].position;
 		}
@@ -367,34 +368,12 @@ int main() {
 	solver.Draw();
 
 	for (const auto seg : solver.segs_) {
-		segments_to_draw.push_back(seg);
+		draw_helper.Push(seg);
 	}
 
 	sf::Time elapsed1 = clock.getElapsedTime();
 	printf("%f\n", elapsed1.asSeconds());
 
-	sf::RenderWindow window(sf::VideoMode(1600, 900), "HZ", sf::Style::Titlebar | sf::Style::Close);
-	window.setVerticalSyncEnabled(true);
-
-	while (window.isOpen()) {
-		sf::Event event;
-		while (window.pollEvent(event)) {
-			if (event.type == sf::Event::Closed) {
-				window.close();
-			}
-		}
-
-		window.clear();
-
-		for (auto seg : segments_to_draw) {
-			sf::Vertex line[] = {
-				sf::Vertex(sf::Vector2f(seg.a.x, seg.a.y)),
-				sf::Vertex(sf::Vector2f(seg.b.x, seg.b.y))
-			};
-			window.draw(line, 2, sf::Lines);
-		}
-
-		window.display();
-	}
+	draw_helper.DrawLoop();
 	return 0;
 }
