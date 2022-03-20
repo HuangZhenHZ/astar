@@ -36,12 +36,12 @@ struct Vec {
 	double SqrLen() const {
 		return x * x + y * y;
 	}
-	//	double Dot(const Vec &v) const {
-	//		return x * v.x + y * v.y;
-	//	}
-	//	double Cross(const Vec &v) const {
-	//		return x * v.y - y * v.x;
-	//	}
+	double Dot(const Vec &v) const {
+		return x * v.x + y * v.y;
+	}
+	double Cross(const Vec &v) const {
+		return x * v.y - y * v.x;
+	}
 };
 
 Vec operator+ (const Vec &a, const Vec &b) {
@@ -56,7 +56,15 @@ Vec operator* (const Vec &a, double t) {
 	return Vec(a.x * t, a.y * t);
 }
 
+Vec operator* (double t, const Vec &a) {
+	return Vec(a.x * t, a.y * t);
+}
+
 Vec operator/ (const Vec &a, double t) {
+	return Vec(a.x / t, a.y / t);
+}
+
+Vec operator/ (double t, const Vec &a) {
 	return Vec(a.x / t, a.y / t);
 }
 
@@ -79,10 +87,10 @@ struct Segment {
 struct Box {
 	Vec center;
 	double heading, length, width;
-	
+
 	Box(const Vec &center, double heading, double length, double width)
-	: center(center), heading(heading), length(length), width(width) {}
-	
+		: center(center), heading(heading), length(length), width(width) {}
+
 	bool HasOverlapWith(const Segment seg) const {
 		Vec direction = Vec::Direction(heading);
 		Vec cen_to_mid = seg.MidPoint()  - center;
@@ -94,10 +102,10 @@ struct Box {
 			return false;
 		}
 		return abs(Cross(vec_of_seg, direction * length)) +
-		abs(Cross(vec_of_seg, direction.Rotate90() * width)) >
-		abs(Cross(vec_of_seg, cen_to_mid)) * 2;
+		       abs(Cross(vec_of_seg, direction.Rotate90() * width)) >
+		       abs(Cross(vec_of_seg, cen_to_mid)) * 2;
 	}
-	
+
 	std::vector<Vec> GetCorners() {
 		std::vector<Vec> corners;
 		Vec direction = Vec::Direction(heading);
@@ -114,7 +122,7 @@ struct Box {
 struct Map {
 	int w, h;
 	std::vector<Segment> segs;
-	
+
 	void ReadFromFile(const char filename[]) {
 		FILE *mapfile = fopen(filename, "r");
 		assert(fscanf(mapfile, "%d%d", &w, &h) == 2);

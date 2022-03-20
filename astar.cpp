@@ -16,6 +16,8 @@ constexpr double kThetaGridSize = 0.15;
 constexpr double kEps = 1e-6;
 constexpr double kInf = 1e60;
 
+std::vector<Segment> segments_to_draw;
+
 struct DistanceMap {
 	int x_grid_num, y_grid_num;
 	int goal_x_idx, goal_y_idx;
@@ -38,9 +40,19 @@ struct DistanceMap {
 	struct State {
 		int x, y;
 		double dis;
-		State(int x, int y, double dis): x(x), y(y), dis(dis) {}
+		int from_x, from_y;
+
+		State(int x, int y, double dis, int from_x, int from_y)
+			: x(x), y(y), dis(dis), from_x(from_x), from_y(from_y) {}
+
 		bool operator< (const State &that) const {
 			return dis > that.dis;
+		}
+		
+		void DrawFrom() const {
+			Vec point1((from_x + 0.5) * kXyGridSize, (from_y + 0.5) * kXyGridSize);
+			Vec point2((x + 0.5) * kXyGridSize, (y + 0.5) * kXyGridSize);
+			segments_to_draw.push_back(Segment(point1, point2));
 		}
 	};
 
@@ -62,7 +74,7 @@ struct DistanceMap {
 		}
 		assert(!obstacle_map[goal_x_idx][goal_y_idx]);
 		distance_map[goal_x_idx][goal_y_idx] = 0.0;
-		q.push(State(goal_x_idx, goal_y_idx, 0.0));
+		q.push(State(goal_x_idx, goal_y_idx, 0.0, goal_x_idx, goal_y_idx));
 
 		while (!q.empty()) {
 			State state = q.top();
@@ -70,6 +82,10 @@ struct DistanceMap {
 			if (state.dis != distance_map[state.x][state.y]) {
 				continue;
 			}
+			// int from_dx = state.x - state.from_x;
+			// int from_dy = state.y - state.from_y;
+			// double from_angle = (from_dx == 0 && from_dy == 0) ? 0.0 : atan2(from_dy, from_dx);
+			
 			for (int i = 0; i < 8; ++i) {
 				int nx = state.x + dx[i];
 				int ny = state.y + dy[i];
@@ -79,12 +95,31 @@ struct DistanceMap {
 				if (obstacle_map[nx][ny]) {
 					continue;
 				}
+				/*
+				double this_angle = atan2(dy[i], dx[i]);
+				if (abs(NormalizeAngle(this_angle - from_angle)) < kPI / 4 + kEps) {
+					double total_dx = from_dx + dx[i];
+					double total_dy = from_dy + dy[i];
+					double ndis = distance_map[state.from_x][state.from_y] +
+					              sqrt(total_dx * total_dx + total_dy * total_dy);
+					if (ndis >= distance_map[nx][ny]) {
+						continue;
+					}
+					distance_map[nx][ny] = ndis;
+					State state_to_push(nx, ny, ndis, state.from_x, state.from_y);
+					q.push(state_to_push);
+					if (abs(total_dx) + abs(total_dy) < 50) {
+						state_to_push.DrawFrom();
+					}
+					continue;
+				}
+				*/
 				double ndis = state.dis + sqrt(dx[i] * dx[i] + dy[i] * dy[i]);
 				if (ndis >= distance_map[nx][ny]) {
 					continue;
 				}
 				distance_map[nx][ny] = ndis;
-				q.push(State(nx, ny, ndis));
+				q.push(State(nx, ny, ndis, state.x, state.y));
 			}
 		}
 	}
@@ -141,8 +176,6 @@ bool operator> (const AStarState &a, const AStarState &b) {
 	return a.total_cost > b.total_cost;
 }
 
-std::vector<Segment> segments_to_draw;
-
 void DrawBox(Box box) {
 	std::vector<Vec> corners = box.GetCorners();
 	for (int i = 0; i < 4; ++i) {
@@ -158,7 +191,7 @@ struct Solver {
 	double w_, h_;
 	int final_id = -1;
 	DistanceMap distance_map_;
-	
+
 	void InitDistanceMap() {
 		int x_grid_num = static_cast<int>(w_ / kXyGridSize) + 1;
 		int y_grid_num = static_cast<int>(h_ / kXyGridSize) + 1;
@@ -167,10 +200,10 @@ struct Solver {
 			for (int j = 0; j < y_grid_num; ++j) {
 				double x = (i + 0.5) * kXyGridSize;
 				double y = (j + 0.5) * kXyGridSize;
-				Box box(Vec(x,y), 0.0, kXyGridSize * 2, kXyGridSize * 2);
+				Box box(Vec(x, y), 0.0, kXyGridSize * 2, kXyGridSize * 2);
 				if (HasCollision(box)) {
 					distance_map_.obstacle_map[i][j] = true;
-					DrawBox(box);
+					// DrawBox(box);
 				}
 			}
 		}
@@ -190,7 +223,7 @@ struct Solver {
 		return 0 < state.position.x && state.position.x < w_ &&
 		       0 < state.position.y && state.position.y < h_;
 	}
-	
+
 	bool HasCollision(const Box &box) const {
 		for (const auto &seg : segs_) {
 			if (box.HasOverlapWith(seg)) {
@@ -211,10 +244,13 @@ struct Solver {
 		double y = Cross(state.direction, p);
 		double h1 = rs::GetMinDis(x * kMaxCurvature, y * kMaxCurvature, final_state_.heading - state.heading) / kMaxCurvature;
 		
-		AStarState astar_state(state);
-		double h2 = distance_map_.distance_map[astar_state.x_grid][astar_state.y_grid] * kXyGridSize;
+		// return h1 * 1.02;
 		
+		AStarState astar_state(state);
+		double h2 = distance_map_.distance_map[astar_state.x_grid][astar_state.y_grid] * kXyGridSize * cos(kPI / 8) - kXyGridSize;
+
 		return std::max(h1, h2);
+		
 		/*
 		const double dist = (state.position - final_state_.position).Length();
 		double heading_change = abs(state.heading - final_state_.heading);
@@ -298,7 +334,7 @@ struct Solver {
 		Vec last_point(100.0, 100.0);
 		for (int id = final_id; id >= 0; id = states_[id].from_id) {
 			printf("%d %lf %lf\n", id, states_[id].h_cost, distance_map_.distance_map[states_[id].x_grid][states_[id].y_grid]);
-			DrawBox(states_[id].CarBox());
+			// DrawBox(states_[id].CarBox());
 			if (id != final_id) {
 				segments_to_draw.push_back(Segment(last_point, states_[id].position));
 			}
@@ -315,17 +351,17 @@ int main() {
 
 	solver.w_ = 1600;
 	solver.h_ = 900;
-	solver.start_state_.position = Vec(200, 200);
+	solver.start_state_.position = Vec(200, 600);
 	solver.start_state_.heading = 0.0;
 	solver.start_state_.direction = Vec::Direction(solver.start_state_.heading);
-	solver.final_state_.position = Vec(1400, 600);
+	solver.final_state_.position = Vec(1200, 200);
 	solver.final_state_.heading = 2.0;
 	solver.final_state_.direction = Vec::Direction(solver.final_state_.heading);
 	// std::swap(solver.start_state_, solver.final_state_);
 	// std::swap(solver.start_state_, solver.final_state_);
 
-	solver.segs_.push_back(Segment(Vec(600, 200), Vec(600, 900)));
-	solver.segs_.push_back(Segment(Vec(800, 0), Vec(800, 700)));
+	 solver.segs_.push_back(Segment(Vec(600, 200), Vec(600, 900)));
+	 solver.segs_.push_back(Segment(Vec(800, 0), Vec(800, 700)));
 
 	printf("%d\n", (int)solver.Solve());
 	solver.Draw();
