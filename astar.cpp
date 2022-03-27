@@ -361,8 +361,8 @@ int main() {
 	// std::swap(solver.start_state_, solver.final_state_);
 	// std::swap(solver.start_state_, solver.final_state_);
 
-	 solver.segs_.push_back(Segment(Vec(600, 200), Vec(600, 900)));
-	 solver.segs_.push_back(Segment(Vec(800, 0), Vec(800, 700)));
+	// solver.segs_.push_back(Segment(Vec(600, 200), Vec(600, 900)));
+	// solver.segs_.push_back(Segment(Vec(800, 0), Vec(800, 700)));
 
 	printf("%d\n", (int)solver.Solve());
 	solver.Draw();

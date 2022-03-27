@@ -22,6 +22,8 @@ struct DrawHelper {
 			
 			window.clear();
 			
+			
+			
 			for (auto seg : segments_to_draw) {
 				sf::Vertex line[] = {
 					sf::Vertex(sf::Vector2f(seg.a.x, seg.a.y)),
