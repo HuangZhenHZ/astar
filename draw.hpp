@@ -22,12 +22,12 @@ struct DrawHelper {
 			
 			window.clear();
 			
-			
+			window.draw(sf::RectangleShape(sf::Vector2f(1800, 1000)));
 			
 			for (auto seg : segments_to_draw) {
 				sf::Vertex line[] = {
-					sf::Vertex(sf::Vector2f(seg.a.x, seg.a.y)),
-					sf::Vertex(sf::Vector2f(seg.b.x, seg.b.y))
+					sf::Vertex(sf::Vector2f(seg.a.x, seg.a.y), sf::Color::Black),
+					sf::Vertex(sf::Vector2f(seg.b.x, seg.b.y), sf::Color::Black)
 				};
 				window.draw(line, 2, sf::Lines);
 			}
