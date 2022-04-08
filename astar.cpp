@@ -25,6 +25,7 @@ sf::Color expanded_states_color;
 double heuristic_ratio = 1.0;
 bool draw_car_box;
 int distance_map_direction_num = 8;
+bool distance_map_consider_heading;
 
 struct DistanceMap {
 	int x_grid_num, y_grid_num;
@@ -146,7 +147,27 @@ struct DistanceMap {
 					continue;
 				}
 				*/
-				double ndis = state.dis + sqrt(dx[i] * dx[i] + dy[i] * dy[i]);
+				
+				double trans_dis = sqrt(dx[i] * dx[i] + dy[i] * dy[i]);
+				
+				if (distance_map_consider_heading) {
+					int last_dir = from_dir_map[state.x][state.y];
+					if (last_dir >= 0) {
+						// Vec last_dir_vec(dx[last_dir], dy[last_dir]);
+						// Vec this_dir_vec(dx[i], dy[i]);
+						// double length_product = last_dir_vec.Length() * this_dir_vec.Length();
+						// double heading_change_sin = Dot(last_dir_vec, this_dir_vec) / length_product;
+						double last_heading = atan2(dy[last_dir], dx[last_dir]);
+						double this_heading = atan2(dy[i], dx[i]);
+						double heading_change = std::abs(NormalizeAngle(this_heading - last_heading));
+						if (heading_change > kPI / 6) {
+							trans_dis = std::max(trans_dis, heading_change / kMaxCurvature);
+						}
+					}
+				}
+				
+				double ndis = state.dis + trans_dis;
+				
 				if (ndis >= distance_map[nx][ny]) {
 					continue;
 				}
