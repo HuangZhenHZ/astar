@@ -2,14 +2,17 @@
 #include "h.hpp"
 
 struct DrawHelper {
-	std::vector<Segment> segments_to_draw;
+	int w_ = 1600;
+	int h_ = 900;
 	
-	void Push(const Segment &seg) {
-		segments_to_draw.push_back(seg);
+	std::vector<std::pair<Segment, sf::Color>> segments_to_draw;
+	
+	void Push(const Segment &seg, const sf::Color &color = sf::Color::Black) {
+		segments_to_draw.push_back(std::make_pair(seg, color));
 	}
 	
 	void DrawLoop() {
-		sf::RenderWindow window(sf::VideoMode(1600, 900), "HZ", sf::Style::Titlebar | sf::Style::Close);
+		sf::RenderWindow window(sf::VideoMode(w_, h_), "HZ", sf::Style::Titlebar | sf::Style::Close);
 		window.setVerticalSyncEnabled(true);
 		
 		while (window.isOpen()) {
@@ -24,10 +27,12 @@ struct DrawHelper {
 			
 			window.draw(sf::RectangleShape(sf::Vector2f(1800, 1000)));
 			
-			for (auto seg : segments_to_draw) {
+			for (auto seg_and_color : segments_to_draw) {
+				const auto &seg = seg_and_color.first;
+				const auto &color = seg_and_color.second;
 				sf::Vertex line[] = {
-					sf::Vertex(sf::Vector2f(seg.a.x, seg.a.y), sf::Color::Black),
-					sf::Vertex(sf::Vector2f(seg.b.x, seg.b.y), sf::Color::Black)
+					sf::Vertex(sf::Vector2f(seg.a.x, seg.a.y), color),
+					sf::Vertex(sf::Vector2f(seg.b.x, seg.b.y), color)
 				};
 				window.draw(line, 2, sf::Lines);
 			}

@@ -19,11 +19,19 @@ constexpr double kInf = 1e60;
 
 DrawHelper draw_helper;
 
+bool use_holonomic_with_obstacles;
+bool draw_expanded_states;
+sf::Color expanded_states_color;
+double heuristic_ratio = 1.0;
+bool draw_car_box;
+int distance_map_direction_num = 8;
+
 struct DistanceMap {
 	int x_grid_num, y_grid_num;
-	int goal_x_idx, goal_y_idx;
+	double goal_x, goal_y;
 	std::vector<std::vector<bool>> obstacle_map;
 	std::vector<std::vector<double>> distance_map;
+	std::vector<std::vector<int>> from_dir_map;
 
 	void InitSize(int n, int m) {
 		x_grid_num = n;
@@ -57,8 +65,20 @@ struct DistanceMap {
 		}
 	};
 
-	static constexpr int dx[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
-	static constexpr int dy[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+	static constexpr int dx[16] = {-1, -1, -1, 0, 0, 1, 1, 1, -2, -2, -1, -1, 1, 1, 2, 2};
+	static constexpr int dy[16] = {-1, 0, 1, -1, 1, -1, 0, 1, -1, 1, -2, 2, -2, 2, -1, 1};
+	
+	double GetDis(double x, double y) const {
+		int x_grid_idx = static_cast<int>(x / kXyGridSize);
+		int y_grid_idx = static_cast<int>(y / kXyGridSize);
+		int from_dir = from_dir_map[x_grid_idx][y_grid_idx];
+		int from_x = from_dir >= 0 ? x_grid_idx - dx[from_dir] : x_grid_idx;
+		int from_y = from_dir >= 0 ? y_grid_idx - dy[from_dir] : y_grid_idx;
+		double pre_x = kXyGridSize * (from_x + 0.5);
+		double pre_y = kXyGridSize * (from_y + 0.5);
+		double pre_dis = kXyGridSize * distance_map[from_x][from_y];
+		return pre_dis + (Vec(x, y) - Vec(pre_x, pre_y)).Length();
+	}
 
 	void Dijkstra() {
 		std::priority_queue<State> q;
@@ -73,6 +93,17 @@ struct DistanceMap {
 				distance_map[i][j] = kInf;
 			}
 		}
+		from_dir_map.clear();
+		from_dir_map.resize(x_grid_num);
+		for (int i = 0; i < x_grid_num; ++i) {
+			from_dir_map[i].resize(y_grid_num);
+			for (int j = 0; j < y_grid_num; ++j) {
+				from_dir_map[i][j] = -1;
+			}
+		}
+		
+		int goal_x_idx = static_cast<int>(goal_x / kXyGridSize);
+		int goal_y_idx = static_cast<int>(goal_y / kXyGridSize);
 		assert(!obstacle_map[goal_x_idx][goal_y_idx]);
 		distance_map[goal_x_idx][goal_y_idx] = 0.0;
 		q.push(State(goal_x_idx, goal_y_idx, 0.0, goal_x_idx, goal_y_idx));
@@ -87,7 +118,7 @@ struct DistanceMap {
 			// int from_dy = state.y - state.from_y;
 			// double from_angle = (from_dx == 0 && from_dy == 0) ? 0.0 : atan2(from_dy, from_dx);
 			
-			for (int i = 0; i < 8; ++i) {
+			for (int i = 0; i < distance_map_direction_num; ++i) {
 				int nx = state.x + dx[i];
 				int ny = state.y + dy[i];
 				if (nx < 0 || nx >= x_grid_num || ny < 0 || ny >= y_grid_num) {
@@ -120,6 +151,7 @@ struct DistanceMap {
 					continue;
 				}
 				distance_map[nx][ny] = ndis;
+				from_dir_map[nx][ny] = i;
 				q.push(State(nx, ny, ndis, state.x, state.y));
 			}
 		}
@@ -208,9 +240,13 @@ struct Solver {
 				}
 			}
 		}
+		/*
 		AStarState final_state(final_state_);
 		distance_map_.goal_x_idx = final_state.x_grid;
 		distance_map_.goal_y_idx = final_state.y_grid;
+		*/
+		distance_map_.goal_x = final_state_.position.x;
+		distance_map_.goal_y = final_state_.position.y;
 		distance_map_.Dijkstra();
 	}
 
@@ -245,12 +281,15 @@ struct Solver {
 		double y = Cross(state.direction, p);
 		double h1 = rs::GetMinDis(x * kMaxCurvature, y * kMaxCurvature, final_state_.heading - state.heading) / kMaxCurvature;
 		
-		// return h1 * 1.02;
+		if (!use_holonomic_with_obstacles) {
+			return h1 * heuristic_ratio;
+		}
 		
-		AStarState astar_state(state);
-		double h2 = distance_map_.distance_map[astar_state.x_grid][astar_state.y_grid] * kXyGridSize * cos(kPI / 8) - kXyGridSize;
+		// AStarState astar_state(state);
+		// double h2 = distance_map_.distance_map[astar_state.x_grid][astar_state.y_grid] * kXyGridSize; // * cos(kPI / 8);
+		double h2 = distance_map_.GetDis(state.position.x, state.position.y);
 
-		return std::max(h1, h2);
+		return std::max(h1, h2) * heuristic_ratio;
 		
 		/*
 		const double dist = (state.position - final_state_.position).Length();
@@ -298,7 +337,11 @@ struct Solver {
 			*/
 			cnt++;
 			// printf("%d %d %d\n", state.x_grid, state.y_grid, state.theta_grid);
-			// segments_to_draw.push_back(Segment(state.position, state.position + state.direction * 5.0));
+			// sf::Color color(0, 0, 0, 10);
+			// draw_helper.Push(Segment(state.position, state.position + state.direction * 5.0), color);
+			if (draw_expanded_states) {
+				draw_helper.Push(Segment(state.position, state.position + state.direction * 5.0), expanded_states_color);
+			}
 
 			constexpr double kStepLength = kXyGridSize * 1.5;
 
@@ -333,40 +376,101 @@ struct Solver {
 
 	void Draw() {
 		Vec last_point(100.0, 100.0);
+		int sum = 0;
 		for (int id = final_id; id >= 0; id = states_[id].from_id) {
+			sum++;
 			printf("%d %lf %lf\n", id, states_[id].h_cost, distance_map_.distance_map[states_[id].x_grid][states_[id].y_grid]);
-			// DrawBox(states_[id].CarBox());
+			if (draw_car_box) {
+				DrawBox(states_[id].CarBox());
+			}
 			if (id != final_id) {
 				draw_helper.Push(Segment(last_point, states_[id].position));
 			}
 			last_point = states_[id].position;
 		}
+		printf("sum = %d\n", sum);
 	}
 
 } solver;
 
-int main() {
-	sf::Clock clock;
-	sf::Time elapsed0 = clock.getElapsedTime();
-	printf("%f\n", elapsed0.asSeconds());
+void problem1() {
+	solver.w_ = 400;
+	solver.h_ = 800;
+	solver.start_state_.position = Vec(200, 200);
+	solver.start_state_.heading = 0.0;
+	solver.start_state_.direction = Vec::Direction(solver.start_state_.heading);
+	solver.final_state_.position = Vec(200, 600);
+	solver.final_state_.heading = 0.0;
+	solver.final_state_.direction = Vec::Direction(solver.final_state_.heading);
+	expanded_states_color = sf::Color(0, 0, 0, 255);
+	heuristic_ratio = 1.10;
+	// draw_car_box = true;
+	DrawBox(Box(Vec(200, 400), 0, 180, 500));
+}
 
+void problem2() {
 	solver.w_ = 1600;
 	solver.h_ = 900;
 	solver.start_state_.position = Vec(200, 600);
 	solver.start_state_.heading = 0.0;
 	solver.start_state_.direction = Vec::Direction(solver.start_state_.heading);
 	solver.final_state_.position = Vec(1200, 200);
-	solver.final_state_.heading = 2.0;
+	solver.final_state_.heading = 0.0;
 	solver.final_state_.direction = Vec::Direction(solver.final_state_.heading);
+	solver.segs_.push_back(Segment(Vec(600, 200), Vec(600, 900)));
+	solver.segs_.push_back(Segment(Vec(800, 0), Vec(800, 700)));
+	use_holonomic_with_obstacles = true;
+	draw_expanded_states = true;
+	expanded_states_color = sf::Color(0, 0, 0, 10);
+	heuristic_ratio = 1.0;
+	distance_map_direction_num = 16;
+	// draw_car_box = true;
+	DrawBox(Box(Vec(700, 425), 0, 1200, 700));
+}
+
+
+
+int main() {
+	sf::Clock clock;
+	sf::Time elapsed0 = clock.getElapsedTime();
+	printf("%f\n", elapsed0.asSeconds());
+	
+	problem2();
+
+	/*
+	solver.w_ = 1600;
+	solver.h_ = 900;
+	
+	solver.start_state_.position = Vec(200, 600);
+	solver.start_state_.heading = 0.0;
+	solver.start_state_.direction = Vec::Direction(solver.start_state_.heading);
+	solver.final_state_.position = Vec(1200, 200);
+	solver.final_state_.heading = 0.0;
+	solver.final_state_.direction = Vec::Direction(solver.final_state_.heading);
+	*/
+	
 	// std::swap(solver.start_state_, solver.final_state_);
 	// std::swap(solver.start_state_, solver.final_state_);
 
+	/*
+	solver.start_state_.position = Vec(200, 200);
+	solver.start_state_.heading = 0.0;
+	solver.start_state_.direction = Vec::Direction(solver.start_state_.heading);
+	solver.final_state_.position = Vec(200, 600);
+	solver.final_state_.heading = 0.0;
+	solver.final_state_.direction = Vec::Direction(solver.final_state_.heading);
+	*/
+	
 	// solver.segs_.push_back(Segment(Vec(600, 200), Vec(600, 900)));
 	// solver.segs_.push_back(Segment(Vec(800, 0), Vec(800, 700)));
 
+	
 	printf("%d\n", (int)solver.Solve());
 	solver.Draw();
 
+	draw_helper.w_ = solver.w_;
+	draw_helper.h_ = solver.h_;
+	
 	for (const auto seg : solver.segs_) {
 		draw_helper.Push(seg);
 	}
