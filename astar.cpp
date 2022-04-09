@@ -509,8 +509,8 @@ void problem3() {
 	distance_map_direction_num = 16;
 	draw_car_box = false;
 	
-	// kThetaGridSize = 0.3;
-	// kCurvatureNum = 5;
+	// kThetaGridSize = 0.15;
+	kCurvatureNum = 5;
 	// draw_car_box = true;
 	DrawBox(Box(Vec(400, 200), 0, 750, 350));
 }
