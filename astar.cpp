@@ -220,7 +220,7 @@ struct AStarState : CarState {
 	int x_grid, y_grid, theta_grid;
 	double g_cost, h_cost, total_cost;
 	int id, from_id;
-	double from_curvature, curvature_delta;
+	double from_step, from_curvature, curvature_delta;
 
 	AStarState (const CarState &state): CarState(state) {
 		x_grid = static_cast<int>(state.position.x / kXyGridSize);
@@ -326,12 +326,13 @@ struct Solver {
 
 	bool qc_[350][200][700];
 
-	void TryPush(AStarState& state, int from_id, double from_curvature, double curvature_delta) {
+	void TryPush(AStarState& state, int from_id, double from_step, double from_curvature, double curvature_delta) {
 		if (qc_[state.x_grid][state.y_grid][state.theta_grid]) {
 			return;
 		}
 		state.id = states_.size();
 		state.from_id = from_id;
+		state.from_step = from_step;
 		state.from_curvature = from_curvature;
 		state.curvature_delta = curvature_delta;
 		qc_[state.x_grid][state.y_grid][state.theta_grid] = true;
@@ -348,9 +349,11 @@ struct Solver {
 		AStarState start_state(start_state_);
 		start_state.h_cost = ComputeH(start_state_);
 		start_state.total_cost = start_state.g_cost + start_state.h_cost;
-		TryPush(start_state, -1, 0, 0);
+		TryPush(start_state, -1, 0, 0, -1);
 
 		int cnt = 0;
+		
+		sf::Clock clock;
 
 		while (!q_.empty()) {
 			AStarState state = q_.top();
@@ -372,37 +375,75 @@ struct Solver {
 
 			constexpr double kStepLength = kXyGridSize * 1.5;
 
-			if (!use_layer_curvature) {
+			if (use_layer_curvature) {
+				kCurvatureNum = 1;
+			}
+			
 			for (int i = -kCurvatureNum; i <= kCurvatureNum; ++i) {
-					double curvature = kMaxCurvature / kCurvatureNum * i;				
-					for (int j = 1; j >= -1; j -= 2) {
-						CarState next_car_state = Trans(state, curvature, j * kStepLength);
-						if (!IsInRange(next_car_state)) {
-							continue;
-						}
-						if (HasCollision(next_car_state)) {
-							continue;
-						}
-						AStarState next_astar_state(next_car_state);
-						next_astar_state.g_cost = state.g_cost + kStepLength;
-						next_astar_state.h_cost = ComputeH(next_car_state);
-						next_astar_state.total_cost = next_astar_state.g_cost + next_astar_state.h_cost;
-						TryPush(next_astar_state, state.id, 0, 0);
+				double curvature = kMaxCurvature / kCurvatureNum * i;				
+				for (int j = 1; j >= -1; j -= 2) {
+					CarState next_car_state = Trans(state, curvature, j * kStepLength);
+					if (!IsInRange(next_car_state)) {
+						continue;
+					}
+					if (HasCollision(next_car_state)) {
+						continue;
+					}
+					AStarState next_astar_state(next_car_state);
+					next_astar_state.g_cost = state.g_cost + kStepLength;
+					next_astar_state.h_cost = ComputeH(next_car_state);
+					next_astar_state.total_cost = next_astar_state.g_cost + next_astar_state.h_cost;
+					if (i == 0) {
+						TryPush(next_astar_state, state.id, j * kStepLength, 0, kMaxCurvature * 0.5);
+					} else {
+						TryPush(next_astar_state, state.id, 0, 0, -1);	
+					}
 
-						if (IsGoalReached(next_astar_state)) {
-							printf("cnt = %d\n", cnt);
-							final_id = next_astar_state.id;
-							return true;
-						}
+					if (IsGoalReached(next_astar_state)) {
+						printf("cnt = %d\n", cnt);
+						final_id = next_astar_state.id;
+						
+						sf::Time elapsed0 = clock.getElapsedTime();
+						printf("%f\n", elapsed0.asSeconds());
+						return true;
 					}
 				}
-			} else {
-				auto 
+			}
+			
+			constexpr double kMinCurvatureDelta = kMaxCurvature / 10;
+			if (use_layer_curvature && state.curvature_delta > kMinCurvatureDelta) {
+				AStarState from_state = states_[state.from_id];
+				for (int i = -1; i <= 1; i += 2) {
+					double curvature = state.from_curvature + state.curvature_delta * i;
+					CarState next_car_state = Trans(from_state, curvature, state.from_step);
+					if (!IsInRange(next_car_state)) {
+						continue;
+					}
+					if (HasCollision(next_car_state)) {
+						continue;
+					}
+					AStarState next_astar_state(next_car_state);
+					next_astar_state.g_cost = state.g_cost + kStepLength;
+					next_astar_state.h_cost = ComputeH(next_car_state);
+					next_astar_state.total_cost = next_astar_state.g_cost + next_astar_state.h_cost;
+					TryPush(next_astar_state, from_state.id, state.from_step, curvature, state.curvature_delta * 0.5);
+					
+					if (IsGoalReached(next_astar_state)) {
+						printf("cnt = %d\n", cnt);
+						final_id = next_astar_state.id;
+						
+						sf::Time elapsed0 = clock.getElapsedTime();
+						printf("%f\n", elapsed0.asSeconds());
+						return true;
+					}
+				}
 			}
 		}
 
 		printf("cnt = %d\n", cnt);
 
+		sf::Time elapsed0 = clock.getElapsedTime();
+		printf("%f\n", elapsed0.asSeconds());
 		return false;
 	}
 
@@ -435,7 +476,9 @@ void problem1() {
 	solver.final_state_.heading = 0.0;
 	solver.final_state_.direction = Vec::Direction(solver.final_state_.heading);
 	expanded_states_color = sf::Color(0, 0, 0, 255);
-	heuristic_ratio = 1.10;
+	heuristic_ratio = 1.0;
+	use_layer_curvature = true;
+	// kCurvatureNum = 5;
 	// draw_car_box = true;
 	DrawBox(Box(Vec(200, 400), 0, 180, 500));
 }
@@ -454,8 +497,10 @@ void problem2() {
 	use_holonomic_with_obstacles = true;
 	draw_expanded_states = true;
 	expanded_states_color = sf::Color(0, 0, 0, 10);
-	heuristic_ratio = 1.00;
+	heuristic_ratio = 1.2;
 	distance_map_direction_num = 16;
+	kCurvatureNum = 5;
+	use_layer_curvature = true;
 	// distance_map_consider_heading = true;
 	// draw_car_box = true;
 	DrawBox(Box(Vec(700, 425), 0, 1200, 700));
@@ -516,6 +561,7 @@ void problem3() {
 	heuristic_ratio = 1.00;
 	distance_map_direction_num = 16;
 	draw_car_box = false;
+	use_layer_curvature = true;
 	
 	// kThetaGridSize = 0.15;
 	kCurvatureNum = 5;
