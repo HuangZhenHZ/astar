@@ -12,7 +12,8 @@ constexpr double kRaToCenter = kCarLength * 0.5 - kRaToRear;
 constexpr double kMaxCurvature = 1.0 / 50.0;
 
 constexpr double kXyGridSize = 5;
-constexpr double kThetaGridSize = 0.15;
+double kThetaGridSize = 0.15;
+int kCurvatureNum = 1;
 
 constexpr double kEps = 1e-6;
 constexpr double kInf = 1e60;
@@ -161,7 +162,8 @@ struct DistanceMap {
 						double this_heading = atan2(dy[i], dx[i]);
 						double heading_change = std::abs(NormalizeAngle(this_heading - last_heading));
 						if (heading_change > kPI / 6) {
-							trans_dis = std::max(trans_dis, heading_change / kMaxCurvature);
+							// trans_dis = std::max(trans_dis, heading_change / kMaxCurvature);
+							trans_dis += heading_change / kMaxCurvature;
 						}
 					}
 				}
@@ -320,7 +322,7 @@ struct Solver {
 		*/
 	}
 
-	bool qc_[350][200][70];
+	bool qc_[350][200][700];
 
 	void TryPush(AStarState& state, int from_id) {
 		if (qc_[state.x_grid][state.y_grid][state.theta_grid]) {
@@ -366,9 +368,10 @@ struct Solver {
 
 			constexpr double kStepLength = kXyGridSize * 1.5;
 
-			for (int i = -1; i <= 1; ++i) {
+			for (int i = -kCurvatureNum; i <= kCurvatureNum; ++i) {
+				double curvature = kMaxCurvature / kCurvatureNum * i;				
 				for (int j = 1; j >= -1; j -= 2) {
-					CarState next_car_state = Trans(state, i * kMaxCurvature, j * kStepLength);
+					CarState next_car_state = Trans(state, curvature, j * kStepLength);
 					if (!IsInRange(next_car_state)) {
 						continue;
 					}
@@ -443,12 +446,74 @@ void problem2() {
 	use_holonomic_with_obstacles = true;
 	draw_expanded_states = true;
 	expanded_states_color = sf::Color(0, 0, 0, 10);
-	heuristic_ratio = 1.0;
+	heuristic_ratio = 1.00;
 	distance_map_direction_num = 16;
+	// distance_map_consider_heading = true;
 	// draw_car_box = true;
 	DrawBox(Box(Vec(700, 425), 0, 1200, 700));
 }
 
+void problem3_bak() {
+	solver.w_ = 800;
+	solver.h_ = 800;
+	solver.start_state_.position = Vec(100, 400);
+	solver.start_state_.heading = kPI2;
+	solver.start_state_.direction = Vec::Direction(solver.start_state_.heading);
+	solver.final_state_.position = Vec(700, 400);
+	solver.final_state_.heading = -kPI2;
+	solver.final_state_.direction = Vec::Direction(solver.final_state_.heading);
+	
+	/*
+	constexpr int kSegNum = 36;
+	constexpr double kDeltaAngle = k2PI / kSegNum;
+	for (int i = 0; i < kSegNum; i++) {
+		double angle1 = i * kDeltaAngle;
+		double angle2 = (i + 1) * kDeltaAngle;
+		Vec point1 = Vec(400 + 200 * cos(angle1), 400 + 200 * sin(angle1));
+		Vec point2 = Vec(400 + 200 * cos(angle2), 400 + 200 * sin(angle2));
+		solver.segs_.push_back(Segment(point1, point2));
+	}
+	*/
+	
+	solver.segs_.push_back(Segment(Vec(400, 0), Vec(400, 388)));
+	solver.segs_.push_back(Segment(Vec(400, 412), Vec(400, 800)));
+	
+	use_holonomic_with_obstacles = true;
+	draw_expanded_states = true;
+	expanded_states_color = sf::Color(0, 0, 0, 10);
+	heuristic_ratio = 1.00;
+	distance_map_direction_num = 16;
+	draw_car_box = true;
+}
+
+void problem3() {
+	solver.w_ = 800;
+	solver.h_ = 400;
+	solver.start_state_.position = Vec(100, 200);
+	solver.start_state_.heading = kPI2;
+	solver.start_state_.direction = Vec::Direction(solver.start_state_.heading);
+	solver.final_state_.position = Vec(700, 200);
+	solver.final_state_.heading = -kPI2;
+	solver.final_state_.direction = Vec::Direction(solver.final_state_.heading);
+	
+	solver.segs_.push_back(Segment(Vec(400, 0), Vec(400, 188)));
+	solver.segs_.push_back(Segment(Vec(400, 212), Vec(400, 400)));
+	
+	solver.segs_.push_back(Segment(Vec(300, 188), Vec(500, 188)));
+	solver.segs_.push_back(Segment(Vec(300, 212), Vec(500, 212)));
+	
+	use_holonomic_with_obstacles = true;
+	draw_expanded_states = true;
+	expanded_states_color = sf::Color(0, 0, 0, 10);
+	heuristic_ratio = 1.00;
+	distance_map_direction_num = 16;
+	draw_car_box = false;
+	
+	// kThetaGridSize = 0.3;
+	// kCurvatureNum = 5;
+	// draw_car_box = true;
+	DrawBox(Box(Vec(400, 200), 0, 750, 350));
+}
 
 
 int main() {
@@ -456,7 +521,7 @@ int main() {
 	sf::Time elapsed0 = clock.getElapsedTime();
 	printf("%f\n", elapsed0.asSeconds());
 	
-	problem2();
+	problem3();
 
 	/*
 	solver.w_ = 1600;
