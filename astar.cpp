@@ -27,6 +27,7 @@ double heuristic_ratio = 1.0;
 bool draw_car_box;
 int distance_map_direction_num = 8;
 bool distance_map_consider_heading;
+bool use_from_state_in_distance_map;
 bool use_layer_curvature;
 
 struct DistanceMap {
@@ -74,13 +75,17 @@ struct DistanceMap {
 	double GetDis(double x, double y) const {
 		int x_grid_idx = static_cast<int>(x / kXyGridSize);
 		int y_grid_idx = static_cast<int>(y / kXyGridSize);
-		int from_dir = from_dir_map[x_grid_idx][y_grid_idx];
-		int from_x = from_dir >= 0 ? x_grid_idx - dx[from_dir] : x_grid_idx;
-		int from_y = from_dir >= 0 ? y_grid_idx - dy[from_dir] : y_grid_idx;
-		double pre_x = kXyGridSize * (from_x + 0.5);
-		double pre_y = kXyGridSize * (from_y + 0.5);
-		double pre_dis = kXyGridSize * distance_map[from_x][from_y];
-		return pre_dis + (Vec(x, y) - Vec(pre_x, pre_y)).Length();
+		if (use_from_state_in_distance_map) {
+			int from_dir = from_dir_map[x_grid_idx][y_grid_idx];
+			int from_x = from_dir >= 0 ? x_grid_idx - dx[from_dir] : x_grid_idx;
+			int from_y = from_dir >= 0 ? y_grid_idx - dy[from_dir] : y_grid_idx;
+			double pre_x = kXyGridSize * (from_x + 0.5);
+			double pre_y = kXyGridSize * (from_y + 0.5);
+			double pre_dis = kXyGridSize * distance_map[from_x][from_y];
+			return pre_dis + (Vec(x, y) - Vec(pre_x, pre_y)).Length();
+		} else {
+			return kXyGridSize * distance_map[x_grid_idx][y_grid_idx];
+		}
 	}
 
 	void Dijkstra() {
@@ -452,7 +457,7 @@ struct Solver {
 		int sum = 0;
 		for (int id = final_id; id >= 0; id = states_[id].from_id) {
 			sum++;
-			printf("%d %lf %lf\n", id, states_[id].h_cost, distance_map_.distance_map[states_[id].x_grid][states_[id].y_grid]);
+			// printf("%d %lf %lf\n", id, states_[id].h_cost, distance_map_.distance_map[states_[id].x_grid][states_[id].y_grid]);
 			if (draw_car_box) {
 				DrawBox(states_[id].CarBox());
 			}
@@ -497,10 +502,10 @@ void problem2() {
 	use_holonomic_with_obstacles = true;
 	draw_expanded_states = true;
 	expanded_states_color = sf::Color(0, 0, 0, 10);
-	heuristic_ratio = 1.2;
+	heuristic_ratio = 1.3;
 	distance_map_direction_num = 16;
-	kCurvatureNum = 5;
-	use_layer_curvature = true;
+	// kCurvatureNum = 5;
+	// use_layer_curvature = true;
 	// distance_map_consider_heading = true;
 	// draw_car_box = true;
 	DrawBox(Box(Vec(700, 425), 0, 1200, 700));
@@ -534,7 +539,7 @@ void problem3_bak() {
 	use_holonomic_with_obstacles = true;
 	draw_expanded_states = true;
 	expanded_states_color = sf::Color(0, 0, 0, 10);
-	heuristic_ratio = 1.00;
+	heuristic_ratio = 1.0;
 	distance_map_direction_num = 16;
 	draw_car_box = true;
 }
@@ -569,13 +574,40 @@ void problem3() {
 	DrawBox(Box(Vec(400, 200), 0, 750, 350));
 }
 
+void problemsample() {
+	solver.w_ = 400;
+	solver.h_ = 200;
+	solver.start_state_.position = Vec(100, 50);
+	solver.start_state_.heading = 0;
+	solver.start_state_.direction = Vec::Direction(solver.start_state_.heading);
+	solver.final_state_.position = Vec(200, 180);
+	solver.final_state_.heading = -kPI2;
+	solver.final_state_.direction = Vec::Direction(solver.final_state_.heading);
+	
+	solver.segs_.push_back(Segment(Vec(180, 100), Vec(180, 200)));
+	solver.segs_.push_back(Segment(Vec(220, 100), Vec(220, 200)));
+	
+	use_holonomic_with_obstacles = true;
+	// draw_expanded_states = true;
+	expanded_states_color = sf::Color(0, 0, 0, 10);
+	heuristic_ratio = 1.00;
+	distance_map_direction_num = 16;
+	draw_car_box = false;
+	use_layer_curvature = true;
+	
+	// kThetaGridSize = 0.15;
+	kCurvatureNum = 5;
+	draw_car_box = true;
+	// DrawBox(Box(Vec(400, 200), 0, 750, 350));
+}
+
 
 int main() {
 	sf::Clock clock;
 	sf::Time elapsed0 = clock.getElapsedTime();
 	printf("%f\n", elapsed0.asSeconds());
 	
-	problem3();
+	problemsample();
 
 	/*
 	solver.w_ = 1600;
