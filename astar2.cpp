@@ -235,7 +235,7 @@ public:
   SearchLayerCoarse() = default;
   ~SearchLayerCoarse() override = default;
 
-  uint64_t ComputeGridId(const CarState &car_state) const {
+  uint64_t ComputeGridId(const CarState &car_state) const override {
     uint64_t x_grid = car_state.car_pose.position.x / xy_grid_size;
     uint64_t y_grid = car_state.car_pose.position.y / xy_grid_size;
     uint64_t theta_grid = Normalize2022Pi(car_state.car_pose.heading.angle()) / theta_grid_size;
@@ -273,8 +273,8 @@ public:
     return false;
   }
 
-  const double xy_grid_size = 0.5;
-  const double theta_grid_size = 0.1;
+  const double xy_grid_size = 1.0;
+  const double theta_grid_size = 0.2;
   std::vector<Segment>* obstacle_segments_;
   CarModel* car_model_;
 };
@@ -283,6 +283,7 @@ class AStarSolver {
 public:
   struct Node {
     Node* from_node = nullptr;
+    int search_layer = 0;
     CarState car_state;
     uint64_t grid_id = 0;
     double g_cost = 0;
@@ -300,23 +301,36 @@ public:
     }
   };
 
-  double ComputeH(const CarState &car_state) const {
-    return std::max(car_state.car_pose.position.DistanceToPoint(final_state_.car_pose.position),
-        std::abs(NormalizeAngle(car_state.car_pose.heading.angle() - final_state_.car_pose.heading.angle())) * 5.0);
+  uint64_t ComputeGridId(const CarState &car_state, int search_layer) const {
+    return search_layers_[search_layer]->ComputeGridId(car_state) * uint64_t(search_layers_.size()) + uint64_t(search_layer);
+  }
+  
+  double ComputePoseDistanceH(const CarPose &pose1, const CarPose &pose2) const {
+    return std::max(pose1.position.DistanceToPoint(pose2.position),
+        std::abs(NormalizeAngle(pose1.heading.angle() - pose2.heading.angle())) * 5.0);
   }
 
-  std::unique_ptr<Node> ConstructNewNode(Node* from_node, const CarState &car_state, double transition_cost) {
+  double ComputeH(const CarState &car_state, int search_layer) const {
+    if ((search_layers_.size() ^ search_layer) & 1) {
+      return ComputePoseDistanceH(car_state.car_pose, final_state_.car_pose);
+    } else {
+      return ComputePoseDistanceH(car_state.car_pose, start_state_.car_pose);
+    }
+  }
+
+  std::unique_ptr<Node> ConstructNewNode(Node* from_node, int search_layer, const CarState &car_state, double transition_cost) const {
     std::unique_ptr<Node> node = std::make_unique<Node>();
     node->from_node = from_node;
+    node->search_layer = search_layer;
     node->car_state = car_state;
-    node->grid_id = single_search_layer_->ComputeGridId(car_state);
+    node->grid_id = ComputeGridId(car_state, search_layer);
     node->g_cost = (from_node ? from_node->g_cost : 0) + transition_cost;
-    node->h_cost = ComputeH(car_state);
-    node->total_cost = node->h_cost + node->g_cost;
+    // node->h_cost = ComputeH(car_state);
+    // node->total_cost = node->h_cost + node->g_cost;
     return node;
   }
-
-  void ProcessNewNode(std::unique_ptr<Node>&& node) {
+  
+  void PushToQueue(std::unique_ptr<Node> node) {
     assert(node != nullptr);
     if (nodes_.count(node->grid_id)) {
       Node* same_grid_node = nodes_[node->grid_id].get();
@@ -327,7 +341,50 @@ public:
     queue_.push(DataInQueue(*node));
     nodes_[node->grid_id] = std::move(node);
   }
-  
+
+  void ProcessNewNode(std::unique_ptr<Node> node) {
+    assert(node != nullptr);
+    if (node->search_layer == 0) {
+      node->h_cost = ComputeH(node->car_state, node->search_layer);
+      node->total_cost = node->h_cost + node->g_cost;
+      PushToQueue(std::move(node));
+      return;
+    }
+    uint64_t prev_level_grid_id = ComputeGridId(node->car_state, node->search_layer - 1);
+    if (nodes_.count(prev_level_grid_id) && nodes_[prev_level_grid_id]->is_closed) {
+      Node* ref_node = nodes_[prev_level_grid_id].get();
+      for (int i = 0; i < 3; ++i) {
+        if (ref_node->from_node) {
+          ref_node = ref_node->from_node;
+        }
+      }
+      node->h_cost = ComputePoseDistanceH(node->car_state.car_pose, ref_node->car_state.car_pose) + ref_node->g_cost;
+      node->total_cost = node->h_cost + node->g_cost;
+      PushToQueue(std::move(node));
+    } else {
+      pending_nodes_[prev_level_grid_id].emplace_back(std::move(node));
+    }
+  }
+
+  void ProcessPendingNodesByNewCloseNode(Node* new_closed_node) {
+    if (!pending_nodes_.count(new_closed_node->grid_id)) {
+      return;
+    }
+    Node* ref_node = new_closed_node;
+    for (int i = 0; i < 3; ++i) {
+      if (ref_node->from_node) {
+        ref_node = ref_node->from_node;
+      }
+    }
+    
+    std::vector<std::unique_ptr<Node>> pending_nodes = std::move(pending_nodes_[new_closed_node->grid_id]);
+    for (auto& node : pending_nodes) {
+      node->h_cost = ComputePoseDistanceH(node->car_state.car_pose, ref_node->car_state.car_pose) + ref_node->g_cost;
+      node->total_cost = node->h_cost + node->g_cost;
+      PushToQueue(std::move(node));
+    }
+  }
+
   void PrintPath(Node* node) {
     if (!node) {
       return;
@@ -355,17 +412,32 @@ public:
   }
 
   bool Solve() {
-    single_search_layer_ = std::make_unique<SearchLayerCoarse>();
-    single_search_layer_->obstacle_segments_ = &obstacle_segments_;
-    single_search_layer_->car_model_ = &car_model_;
+    search_layer_0_ = std::make_unique<SearchLayerCoarse>();
+    search_layer_0_->obstacle_segments_ = &obstacle_segments_;
+    search_layer_0_->car_model_ = &car_model_;
     
+    search_layer_1_ = std::make_unique<SearchLayerCoarse>();
+    search_layer_1_->obstacle_segments_ = &obstacle_segments_;
+    search_layer_1_->car_model_ = &car_model_;
+    
+    search_layers_.emplace_back(search_layer_0_.get());
+    search_layers_.emplace_back(search_layer_1_.get());
+
     while (!queue_.empty()) {
       queue_.pop();
     }
-    ProcessNewNode(ConstructNewNode(nullptr, start_state_, 0.0));
+    // for (int i = 0; i < int(search_layers_.size()); ++i) {
+    //   ProcessNewNode(ConstructNewNode(nullptr, i, start_state_, 0.0));
+    // }
+    ProcessNewNode(ConstructNewNode(nullptr, 0, final_state_, 0.0));
+    ProcessNewNode(ConstructNewNode(nullptr, 1, start_state_, 0.0));
     int cnt = 0;
     while (!queue_.empty()) {
       cnt++;
+      if (cnt % 100000 == 0) {
+        printf("cnt = %d\n", cnt);
+      }
+      
       DataInQueue curr_data = queue_.top();
       queue_.pop();
       Node* curr_node = nodes_[curr_data.grid_id].get();
@@ -373,7 +445,10 @@ public:
         continue;
       }
       curr_node->is_closed = true;
-      if (curr_node->h_cost < 0.5) {
+      ProcessPendingNodesByNewCloseNode(curr_node);
+      // if (curr_node->h_cost < 0.5) {
+      if (curr_node->search_layer + 1 == int(search_layers_.size()) &&
+          search_layers_.back()->ComputeGridId(curr_node->car_state) == search_layers_.back()->ComputeGridId(final_state_)) {
         PrintPath(curr_node);
         printf("total cost = %lf\n", curr_node->total_cost);
         printf("%llu\n", nodes_.size());
@@ -382,9 +457,9 @@ public:
       }
 
       std::vector<std::pair<CarState, double>> next_states_with_transition_costs =
-          single_search_layer_->GetNextStatesWithTransitionCosts(curr_node->car_state);
+          search_layers_[curr_node->search_layer]->GetNextStatesWithTransitionCosts(curr_node->car_state);
       for (const auto &[next_state, transition_cost] : next_states_with_transition_costs) {
-        ProcessNewNode(ConstructNewNode(curr_node, next_state, transition_cost));
+        ProcessNewNode(ConstructNewNode(curr_node, curr_node->search_layer, next_state, transition_cost));
       }
     }
     return false;
@@ -393,13 +468,16 @@ public:
 // private:
   std::priority_queue<DataInQueue, std::vector<DataInQueue>, std::greater<>> queue_;
   std::unordered_map<uint64_t, std::unique_ptr<Node>> nodes_;
+  std::unordered_map<uint64_t, std::vector<std::unique_ptr<Node>>> pending_nodes_;
   Painter painter_;
   // Input
   CarModel car_model_;
   CarState start_state_, final_state_;
   std::vector<Segment> obstacle_segments_;
 
-  std::unique_ptr<SearchLayerCoarse> single_search_layer_;
+  std::vector<SearchLayerBase*> search_layers_;
+  std::unique_ptr<SearchLayerCoarse> search_layer_0_;
+  std::unique_ptr<SearchLayerCoarse> search_layer_1_;
 };
 
 int main() {
