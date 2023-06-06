@@ -247,7 +247,8 @@ public:
 
   std::vector<std::pair<CarState, double>> GetNextStatesWithTransitionCosts(const CarState &car_state) const override {
     std::vector<std::pair<CarState, double>> result = {};
-    for (double signed_curvature = -0.2; signed_curvature < 0.201; signed_curvature += 0.2) {
+    for (int i = -curvature_sample_nums; i <= curvature_sample_nums; ++i) {
+      double signed_curvature = 0.2 / curvature_sample_nums * i;
       for (double signed_distance = -xy_grid_size * 1.6; signed_distance < xy_grid_size * 2; signed_distance += xy_grid_size * 0.8) {
         if (std::abs(signed_distance) < 0.01) {
           continue;
@@ -273,8 +274,9 @@ public:
     return false;
   }
 
-  const double xy_grid_size = 1.0;
-  const double theta_grid_size = 0.2;
+  double xy_grid_size = 1.0;
+  double theta_grid_size = 0.2;
+  int curvature_sample_nums = 1;
   std::vector<Segment>* obstacle_segments_;
   CarModel* car_model_;
 };
@@ -353,7 +355,7 @@ public:
     uint64_t prev_level_grid_id = ComputeGridId(node->car_state, node->search_layer - 1);
     if (nodes_.count(prev_level_grid_id) && nodes_[prev_level_grid_id]->is_closed) {
       Node* ref_node = nodes_[prev_level_grid_id].get();
-      for (int i = 0; i < 3; ++i) {
+      for (int i = 0; i < 2; ++i) {
         if (ref_node->from_node) {
           ref_node = ref_node->from_node;
         }
@@ -371,7 +373,7 @@ public:
       return;
     }
     Node* ref_node = new_closed_node;
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 2; ++i) {
       if (ref_node->from_node) {
         ref_node = ref_node->from_node;
       }
@@ -419,6 +421,9 @@ public:
     search_layer_1_ = std::make_unique<SearchLayerCoarse>();
     search_layer_1_->obstacle_segments_ = &obstacle_segments_;
     search_layer_1_->car_model_ = &car_model_;
+    search_layer_1_->xy_grid_size = 0.4;
+    search_layer_1_->theta_grid_size = 0.02;
+    search_layer_1_->curvature_sample_nums = 4;
     
     search_layers_.emplace_back(search_layer_0_.get());
     search_layers_.emplace_back(search_layer_1_.get());
