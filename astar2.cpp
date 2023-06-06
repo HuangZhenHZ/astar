@@ -222,6 +222,63 @@ struct CarState {
   CarPose car_pose = CarPose();
 };
 
+class SearchLayerBase {
+public:
+  SearchLayerBase() = default;
+  virtual ~SearchLayerBase() = default;
+  virtual uint64_t ComputeGridId(const CarState &car_state) const = 0;
+  virtual std::vector<std::pair<CarState, double>> GetNextStatesWithTransitionCosts(const CarState &car_state) const = 0;
+};
+
+class SearchLayerCoarse : public SearchLayerBase {
+public:
+  SearchLayerCoarse() = default;
+  ~SearchLayerCoarse() override = default;
+
+  uint64_t ComputeGridId(const CarState &car_state) const {
+    uint64_t x_grid = car_state.car_pose.position.x / xy_grid_size;
+    uint64_t y_grid = car_state.car_pose.position.y / xy_grid_size;
+    uint64_t theta_grid = Normalize2022Pi(car_state.car_pose.heading.angle()) / theta_grid_size;
+    constexpr uint64_t kXGridBase = 1e8;
+    constexpr uint64_t kYGridBase = 1e4;
+    constexpr uint64_t kThetaGridBase = 1;
+    return x_grid * kXGridBase + y_grid * kYGridBase + theta_grid * kThetaGridBase;
+  }
+
+  std::vector<std::pair<CarState, double>> GetNextStatesWithTransitionCosts(const CarState &car_state) const override {
+    std::vector<std::pair<CarState, double>> result = {};
+    for (double signed_curvature = -0.2; signed_curvature < 0.201; signed_curvature += 0.2) {
+      for (double signed_distance = -xy_grid_size * 1.6; signed_distance < xy_grid_size * 2; signed_distance += xy_grid_size * 0.8) {
+        if (std::abs(signed_distance) < 0.01) {
+          continue;
+        }
+        CarState next_state = car_state;
+        next_state.car_pose.Perform(CarPoseTransform::FromConstCurvature(signed_curvature, signed_distance));
+        if (HasCollision(next_state.car_pose)) {
+          continue;
+        }
+        result.emplace_back(next_state, std::abs(signed_distance));
+      }
+    }
+    return result;
+  }
+
+  bool HasCollision(const CarPose &car_pose) const {
+    Box car_box = car_model_->GetCarBox(car_pose);
+    for (const auto &obstacle_segment : *obstacle_segments_) {
+      if (car_box.HasOverlapWithSegment(obstacle_segment)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  const double xy_grid_size = 0.5;
+  const double theta_grid_size = 0.1;
+  std::vector<Segment>* obstacle_segments_;
+  CarModel* car_model_;
+};
+
 class AStarSolver {
 public:
   struct Node {
@@ -248,21 +305,11 @@ public:
         std::abs(NormalizeAngle(car_state.car_pose.heading.angle() - final_state_.car_pose.heading.angle())) * 5.0);
   }
 
-  uint64_t ComputeGridId(const CarState &car_state) const {
-    uint64_t x_grid = car_state.car_pose.position.x / kXYGridSize;
-    uint64_t y_grid = car_state.car_pose.position.y / kXYGridSize;
-    uint64_t theta_grid = Normalize2022Pi(car_state.car_pose.heading.angle()) / kThetaGridSize;
-    constexpr uint64_t kXGridBase = 1e8;
-    constexpr uint64_t kYGridBase = 1e4;
-    constexpr uint64_t kThetaGridBase = 1;
-    return x_grid * kXGridBase + y_grid * kYGridBase + theta_grid * kThetaGridBase;
-  }
-
   std::unique_ptr<Node> ConstructNewNode(Node* from_node, const CarState &car_state, double transition_cost) {
     std::unique_ptr<Node> node = std::make_unique<Node>();
     node->from_node = from_node;
     node->car_state = car_state;
-    node->grid_id = ComputeGridId(car_state);
+    node->grid_id = single_search_layer_->ComputeGridId(car_state);
     node->g_cost = (from_node ? from_node->g_cost : 0) + transition_cost;
     node->h_cost = ComputeH(car_state);
     node->total_cost = node->h_cost + node->g_cost;
@@ -308,6 +355,10 @@ public:
   }
 
   bool Solve() {
+    single_search_layer_ = std::make_unique<SearchLayerCoarse>();
+    single_search_layer_->obstacle_segments_ = &obstacle_segments_;
+    single_search_layer_->car_model_ = &car_model_;
+    
     while (!queue_.empty()) {
       queue_.pop();
     }
@@ -323,33 +374,23 @@ public:
       }
       curr_node->is_closed = true;
       if (curr_node->h_cost < 0.5) {
-        // PrintPath(curr_node);
+        PrintPath(curr_node);
         printf("total cost = %lf\n", curr_node->total_cost);
         printf("%llu\n", nodes_.size());
         printf("%d\n", cnt);
         return true;
       }
-      for (double signed_curvature = -0.2; signed_curvature < 0.3; signed_curvature += 0.2) {
-        for (double signed_distance = -kXYGridSize * 1.6; signed_distance < kXYGridSize * 2; signed_distance += kXYGridSize * 0.8) {
-          if (std::abs(signed_distance) < 0.01) {
-            continue;
-          }
-          CarState next_state = curr_node->car_state;
-          next_state.car_pose.Perform(CarPoseTransform::FromConstCurvature(signed_curvature, signed_distance));
-          if (HasCollision(next_state.car_pose)) {
-            continue;
-          }
-          ProcessNewNode(ConstructNewNode(curr_node, next_state, std::abs(signed_distance)));
-        }
+
+      std::vector<std::pair<CarState, double>> next_states_with_transition_costs =
+          single_search_layer_->GetNextStatesWithTransitionCosts(curr_node->car_state);
+      for (const auto &[next_state, transition_cost] : next_states_with_transition_costs) {
+        ProcessNewNode(ConstructNewNode(curr_node, next_state, transition_cost));
       }
     }
     return false;
   }
 
 // private:
-  static constexpr double kXYGridSize = 0.5;
-  static constexpr double kThetaGridSize = 0.1;
-
   std::priority_queue<DataInQueue, std::vector<DataInQueue>, std::greater<>> queue_;
   std::unordered_map<uint64_t, std::unique_ptr<Node>> nodes_;
   Painter painter_;
@@ -357,6 +398,8 @@ public:
   CarModel car_model_;
   CarState start_state_, final_state_;
   std::vector<Segment> obstacle_segments_;
+
+  std::unique_ptr<SearchLayerCoarse> single_search_layer_;
 };
 
 int main() {
@@ -366,7 +409,7 @@ int main() {
   astar_solver.final_state_.car_pose = CarPose(Vec(80, 80), Angle(0));
   astar_solver.obstacle_segments_.emplace_back(Vec(30, 40), Vec(40, 30));
   printf("%d\n", astar_solver.Solve());
-  // astar_solver.painter_.Draw();
+  astar_solver.painter_.Draw();
   return 0;
 }
 
