@@ -196,19 +196,26 @@ struct Painter {
   double width = 100;
   double height = 100;
   double scale = 15;
-  std::vector<std::pair<Vec, Vec>> segments;
-  void EmplaceSegment(const Vec &a, const Vec &b) {
-    segments.emplace_back(a, b);
+  std::vector<Segment> segments;
+  template <class... Args>
+  void EmplaceSegment(Args&&... args) {
+    segments.emplace_back(std::forward<Args>(args)...);
   }
   void Draw() {
     InitWindow(width * scale, height * scale, "window");
     SetTargetFPS(60);
+    int frame_cnt = 0;
     while (!WindowShouldClose()) {
+      frame_cnt += 100;
+      if (frame_cnt >= int(segments.size())) {
+        frame_cnt = 0;
+      }
       BeginDrawing();
       ClearBackground(RAYWHITE);
-      for (const auto& segment : segments) {
-        DrawLine(segment.first.x * scale, (width - segment.first.y) * scale,
-                 segment.second.x * scale, (width - segment.second.y) * scale, BLACK);
+      for (int i = 0; i < frame_cnt; ++i) {
+        const Segment &segment = segments[i];
+        DrawLine(segment.a.x * scale, (width - segment.a.y) * scale,
+                 segment.b.x * scale, (width - segment.b.y) * scale, BLACK);
       }
       EndDrawing();
     }
@@ -361,6 +368,7 @@ public:
         }
       }
       node->h_cost = ComputePoseDistanceH(node->car_state.car_pose, ref_node->car_state.car_pose) + ref_node->g_cost;
+      // node->h_cost = ComputeH(node->car_state, node->search_layer);
       node->total_cost = node->h_cost + node->g_cost;
       PushToQueue(std::move(node));
     } else {
@@ -382,6 +390,7 @@ public:
     std::vector<std::unique_ptr<Node>> pending_nodes = std::move(pending_nodes_[new_closed_node->grid_id]);
     for (auto& node : pending_nodes) {
       node->h_cost = ComputePoseDistanceH(node->car_state.car_pose, ref_node->car_state.car_pose) + ref_node->g_cost;
+      // node->h_cost = ComputeH(node->car_state, node->search_layer);
       node->total_cost = node->h_cost + node->g_cost;
       PushToQueue(std::move(node));
     }
@@ -414,6 +423,10 @@ public:
   }
 
   bool Solve() {
+    for (const Segment &segment : obstacle_segments_) {
+      painter_.EmplaceSegment(segment);
+    }
+    
     search_layer_0_ = std::make_unique<SearchLayerCoarse>();
     search_layer_0_->obstacle_segments_ = &obstacle_segments_;
     search_layer_0_->car_model_ = &car_model_;
@@ -451,6 +464,7 @@ public:
       }
       curr_node->is_closed = true;
       ProcessPendingNodesByNewCloseNode(curr_node);
+      painter_.EmplaceSegment(curr_node->car_state.car_pose.position, curr_node->car_state.car_pose.position + curr_node->car_state.car_pose.heading.unit_vec() * 0.2);
       // if (curr_node->h_cost < 0.5) {
       if (curr_node->search_layer + 1 == int(search_layers_.size()) &&
           search_layers_.back()->ComputeGridId(curr_node->car_state) == search_layers_.back()->ComputeGridId(final_state_)) {
