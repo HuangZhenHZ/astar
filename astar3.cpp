@@ -196,10 +196,12 @@ struct Painter {
   double width = 100;
   double height = 100;
   double scale = 15;
-  std::vector<Segment> segments;
-  template <class... Args>
-  void AddSegment(Args&&... args) {
-    segments.emplace_back(std::forward<Args>(args)...);
+  std::vector<std::pair<Segment, Color>> segments_and_colors;
+  void AddSegmentWithColor(const Segment &segment, const Color &color) {
+    segments_and_colors.emplace_back(segment, color);
+  }
+  void AddSegmentWithColor(const Vec &a, const Vec &b, const Color &color) {
+    segments_and_colors.emplace_back(Segment(a, b), color);
   }
   void Draw() {
     InitWindow(width * scale, height * scale, "window");
@@ -207,9 +209,9 @@ struct Painter {
     while (!WindowShouldClose()) {
       BeginDrawing();
       ClearBackground(RAYWHITE);
-      for (const auto& segment : segments) {
+      for (const auto& [segment, color] : segments_and_colors) {
         DrawLine(segment.a.x * scale, (width - segment.a.y) * scale,
-                 segment.b.x * scale, (width - segment.b.y) * scale, BLACK);
+                 segment.b.x * scale, (width - segment.b.y) * scale, color);
       }
       EndDrawing();
     }
@@ -217,10 +219,16 @@ struct Painter {
   }
 };
 
+Segment GetDebugShortSegment(const CarPose &car_pose, double length = 0.5) {
+  return {car_pose.position, car_pose.position + car_pose.heading.unit_vec() * length};
+}
+
+
 // ===== solver =====
 
 struct CarState {
   CarPose car_pose = CarPose();
+  bool is_reverse = false;
 };
 
 template <double kXYGridSize, double kThetaGridSize>
@@ -309,10 +317,12 @@ public:
     return false;
   }
   
+  bool IsGoalReached(const CarState &car_state) const {
+    return car_state.car_pose.position.DistanceToPoint(final_state_.car_pose.position) < kXYGridSize * 1.5 &&
+        std::abs(NormalizeAngle(car_state.car_pose.heading.angle() - final_state_.car_pose.heading.angle())) < kThetaGridSize;
+  }
+  
   bool Solve(std::vector<CarState> *car_states) {
-    // for (const Segment &segment : obstacle_segments_) {
-    //   painter_.AddSegment(segment);
-    // }
     while (!queue_.empty()) {
       queue_.pop();
     }
@@ -320,6 +330,16 @@ public:
     int cnt = 0;
     while (!queue_.empty()) {
       cnt++;
+      if (cnt > 200000) {
+        Painter painter;
+        painter.AddSegmentWithColor(GetDebugShortSegment(start_state_.car_pose), BLACK);
+        painter.AddSegmentWithColor(GetDebugShortSegment(final_state_.car_pose), BLACK);
+        for (const Segment &segment : *obstacle_segments_) {
+          painter.AddSegmentWithColor(segment, BLACK);
+        }
+        painter.Draw();
+        return false;
+      }
       DataInQueue curr_data = queue_.top();
       queue_.pop();
       Node* curr_node = nodes_[curr_data.grid_id].get();
@@ -327,7 +347,9 @@ public:
         continue;
       }
       curr_node->is_closed = true;
-      if (curr_node->h_cost < 0.5) {
+      // if (curr_node->h_cost < 0.5) {
+      // if (curr_node->grid_id == ComputeGridId(final_state_)) {
+      if (IsGoalReached(curr_node->car_state)) {
         if (car_states != nullptr) {
           car_states->clear();
           for (Node* node = curr_node; node != nullptr; node = node->from_node) {
@@ -335,7 +357,7 @@ public:
           }
           std::reverse(car_states->begin(), car_states->end());
         }
-        // PrintPath(curr_node);
+        PrintPath(curr_node);
         printf("total cost = %lf\n", curr_node->total_cost);
         printf("%llu\n", nodes_.size());
         printf("%d\n", cnt);
@@ -351,7 +373,12 @@ public:
           if (HasCollision(next_state.car_pose)) {
             continue;
           }
-          ProcessNewNode(ConstructNewNode(curr_node, next_state, std::abs(signed_distance)));
+          next_state.is_reverse = signed_distance < 0;
+          double cost = std::abs(signed_distance);
+          if (curr_node->car_state.is_reverse != next_state.is_reverse) {
+            cost += 1.0;
+          }
+          ProcessNewNode(ConstructNewNode(curr_node, next_state, cost));
         }
       }
     }
@@ -371,18 +398,20 @@ public:
   std::vector<Segment>* obstacle_segments_;
 };
 
-void PaintPath(Painter *painter, const std::vector<CarState>& car_states) {
+void PrintPath(Painter *painter, const std::vector<CarState>& car_states, const Color &color) {
   for (int i = 0; i + 1 < int(car_states.size()); ++i) {
-    painter->AddSegment(car_states[i].car_pose.position, car_states[i + 1].car_pose.position);
+    painter->AddSegmentWithColor(car_states[i].car_pose.position, car_states[i + 1].car_pose.position, color);
   }
 }
 
 void Pursuit(std::vector<Segment>* obstacle_segments,
              const std::vector<CarState>& input_states,
-             std::vector<CarState>* output_states) {
+             std::vector<CarState>* output_states,
+             int start_index,
+             int index_step) {
   output_states->clear();
   output_states->emplace_back(input_states.front());
-  int target_state_index = 5;
+  int target_state_index = start_index;
   while (target_state_index < int(input_states.size())) {
     AStarSolver<0.2, 0.04> astar_solver;
     astar_solver.start_state_ = output_states->back();
@@ -390,11 +419,12 @@ void Pursuit(std::vector<Segment>* obstacle_segments,
     astar_solver.obstacle_segments_ = obstacle_segments;
     std::vector<CarState> car_states = {};
     printf("solver status %d\n",astar_solver.Solve(&car_states));
-    for (int j = 1; j < int(car_states.size()); ++j) {
+    int j_max = target_state_index + 1 == int(input_states.size()) ? int(car_states.size()) : (int(car_states.size()) + 1) / 2;
+    for (int j = 1; j < j_max; ++j) {
       output_states->emplace_back(car_states[j]);
     }
     if (target_state_index + 1 < int(input_states.size())) {
-      target_state_index = std::min(target_state_index + 5, int(input_states.size()) - 1);
+      target_state_index = std::min(target_state_index + index_step, int(input_states.size()) - 1);
     } else {
       break;
     }
@@ -404,18 +434,38 @@ void Pursuit(std::vector<Segment>* obstacle_segments,
 int main() {
   BoxTest();
   std::vector<Segment> obstacle_segments = {};
-  obstacle_segments.emplace_back(Vec(30, 40), Vec(40, 30));
+  // obstacle_segments.emplace_back(Vec(30, 40), Vec(40, 30));
   AStarSolver<0.5, 0.1> astar_solver;
+  
+  /*
   astar_solver.start_state_.car_pose = CarPose(Vec(20, 20), Angle(0));
   astar_solver.final_state_.car_pose = CarPose(Vec(80, 80), Angle(0));
   astar_solver.obstacle_segments_ = &obstacle_segments;
+   */
+  
+  astar_solver.start_state_.car_pose = CarPose(Vec(50, 50), Angle(pi * 0.5));
+  astar_solver.final_state_.car_pose = CarPose(Vec(45, 50), Angle(-pi * 0.5));
+  astar_solver.obstacle_segments_ = &obstacle_segments;
+  obstacle_segments.emplace_back(Vec(42, 0), Vec(42, 100));
+  obstacle_segments.emplace_back(Vec(53, 0), Vec(53, 100));
+
+  Painter painter;
+  painter.AddSegmentWithColor(GetDebugShortSegment(astar_solver.start_state_.car_pose), BLACK);
+  painter.AddSegmentWithColor(GetDebugShortSegment(astar_solver.final_state_.car_pose), BLACK);
+  for (const Segment &segment : obstacle_segments) {
+    painter.AddSegmentWithColor(segment, BLACK);
+  }
   std::vector<CarState> car_states = {};
   printf("%d\n", astar_solver.Solve(&car_states));
-  Painter painter;
-  // PaintPath(&painter, car_states);
+  PrintPath(&painter, car_states, BLACK);
   std::vector<CarState> smooth_states = {};
-  Pursuit(&obstacle_segments, car_states, &smooth_states);
-  PaintPath(&painter, smooth_states);
+  car_states.back() = astar_solver.final_state_;
+  Pursuit(&obstacle_segments, car_states, &smooth_states, 5, 5);
+  PrintPath(&painter, smooth_states, RED);
+  // car_states = std::move(smooth_states);
+  // car_states.back() = astar_solver.final_state_;
+  // Pursuit(&obstacle_segments, car_states, &smooth_states, 10, 10);
+  // PrintPath(&painter, smooth_states, GREEN);
   painter.Draw();
   return 0;
 }
