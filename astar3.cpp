@@ -233,7 +233,8 @@ struct CarState {
 
 class AStarSolver {
 public:
-  AStarSolver(double xy_grid_size, double theta_grid_size) : xy_grid_size_(xy_grid_size), theta_grid_size_(theta_grid_size) {}
+  AStarSolver(double xy_grid_size, double theta_grid_size, int curvature_sample_num) :
+      xy_grid_size_(xy_grid_size), theta_grid_size_(theta_grid_size), curvature_sample_num_(curvature_sample_num) {}
   
   struct Node {
     Node* from_node = nullptr;
@@ -330,8 +331,15 @@ public:
     ProcessNewNode(ConstructNewNode(nullptr, start_state_, 0.0));
     int cnt = 0;
     while (!queue_.empty()) {
+      DataInQueue curr_data = queue_.top();
+      queue_.pop();
+      Node* curr_node = nodes_[curr_data.grid_id].get();
+      if (curr_node->is_closed) {
+        continue;
+      }
+      curr_node->is_closed = true;
       cnt++;
-      if (cnt > 200000) {
+      if (cnt > 300000) {
         Painter painter;
         painter.AddSegmentWithColor(GetDebugShortSegment(start_state_.car_pose), BLACK);
         painter.AddSegmentWithColor(GetDebugShortSegment(final_state_.car_pose), BLACK);
@@ -341,13 +349,6 @@ public:
         painter.Draw();
         return false;
       }
-      DataInQueue curr_data = queue_.top();
-      queue_.pop();
-      Node* curr_node = nodes_[curr_data.grid_id].get();
-      if (curr_node->is_closed) {
-        continue;
-      }
-      curr_node->is_closed = true;
       // if (curr_node->h_cost < 0.5) {
       // if (curr_node->grid_id == ComputeGridId(final_state_)) {
       if (IsGoalReached(curr_node->car_state)) {
@@ -364,7 +365,8 @@ public:
         printf("%d\n", cnt);
         return true;
       }
-      for (double signed_curvature = -0.2; signed_curvature < 0.3; signed_curvature += 0.2) {
+      for (int i = -curvature_sample_num_; i <= curvature_sample_num_; ++i) {
+        double signed_curvature = 0.2 / curvature_sample_num_ * i;
         for (double signed_distance = -xy_grid_size_ * 1.6; signed_distance < xy_grid_size_ * 2; signed_distance += xy_grid_size_ * 0.8) {
           if (std::abs(signed_distance) < 0.01) {
             continue;
@@ -388,6 +390,7 @@ public:
 
   const double xy_grid_size_;
   const double theta_grid_size_;
+  const int curvature_sample_num_;
   
   std::priority_queue<DataInQueue, std::vector<DataInQueue>, std::greater<>> queue_;
   std::unordered_map<uint64_t, std::unique_ptr<Node>> nodes_;
@@ -413,7 +416,7 @@ void Pursuit(std::vector<Segment>* obstacle_segments,
   output_states->emplace_back(input_states.front());
   int target_state_index = start_index;
   while (target_state_index < int(input_states.size())) {
-    AStarSolver astar_solver(0.2, 0.04);
+    AStarSolver astar_solver(0.2, 0.02, 2);
     astar_solver.start_state_ = output_states->back();
     astar_solver.final_state_ = input_states[target_state_index];
     astar_solver.obstacle_segments_ = obstacle_segments;
@@ -456,17 +459,19 @@ void GenerateKTurnCase(AStarSolver *astar_solver) {
 }
 
 void GenerateNarrowRoadCase(AStarSolver *astar_solver) {
-  constexpr double road_width = 3.0;
-  astar_solver->start_state_.car_pose = CarPose(Vec(60, 30), Angle(pi * 0.5));
+  constexpr double road_width = 2.2;
+  astar_solver->start_state_.car_pose = CarPose(Vec(60, 30), Angle(1.0));
   astar_solver->final_state_.car_pose = CarPose(Vec(40, 80), Angle(pi * 0.5));
   astar_solver->obstacle_segments_->emplace_back(Vec(40 - road_width * 0.5, 50), Vec(40 - road_width * 0.5, 100));
   astar_solver->obstacle_segments_->emplace_back(Vec(40 + road_width * 0.5, 50), Vec(40 + road_width * 0.5, 100));
+  astar_solver->obstacle_segments_->emplace_back(Vec(40 + road_width * 0.5, 50), Vec(100, 50));
+  astar_solver->obstacle_segments_->emplace_back(Vec(0, 50), Vec(40 - road_width * 0.5, 50));
 }
 
 int main() {
   BoxTest();
   std::vector<Segment> obstacle_segments = {};
-  AStarSolver astar_solver(0.5, 0.1);
+  AStarSolver astar_solver(0.5, 0.05, 2);
   astar_solver.obstacle_segments_ = &obstacle_segments;
 
   GenerateNarrowRoadCase(&astar_solver);
