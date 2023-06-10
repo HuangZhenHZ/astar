@@ -231,9 +231,10 @@ struct CarState {
   bool is_reverse = false;
 };
 
-template <double kXYGridSize, double kThetaGridSize>
 class AStarSolver {
 public:
+  AStarSolver(double xy_grid_size, double theta_grid_size) : xy_grid_size_(xy_grid_size), theta_grid_size_(theta_grid_size) {}
+  
   struct Node {
     Node* from_node = nullptr;
     CarState car_state;
@@ -259,9 +260,9 @@ public:
   }
   
   uint64_t ComputeGridId(const CarState &car_state) const {
-    uint64_t x_grid = car_state.car_pose.position.x / kXYGridSize;
-    uint64_t y_grid = car_state.car_pose.position.y / kXYGridSize;
-    uint64_t theta_grid = Normalize2022Pi(car_state.car_pose.heading.angle()) / kThetaGridSize;
+    uint64_t x_grid = car_state.car_pose.position.x / xy_grid_size_;
+    uint64_t y_grid = car_state.car_pose.position.y / xy_grid_size_;
+    uint64_t theta_grid = Normalize2022Pi(car_state.car_pose.heading.angle()) / theta_grid_size_;
     constexpr uint64_t kXGridBase = 1e8;
     constexpr uint64_t kYGridBase = 1e4;
     constexpr uint64_t kThetaGridBase = 1;
@@ -318,8 +319,8 @@ public:
   }
   
   bool IsGoalReached(const CarState &car_state) const {
-    return car_state.car_pose.position.DistanceToPoint(final_state_.car_pose.position) < kXYGridSize * 1.5 &&
-        std::abs(NormalizeAngle(car_state.car_pose.heading.angle() - final_state_.car_pose.heading.angle())) < kThetaGridSize;
+    return car_state.car_pose.position.DistanceToPoint(final_state_.car_pose.position) < xy_grid_size_ * 1.5 &&
+        std::abs(NormalizeAngle(car_state.car_pose.heading.angle() - final_state_.car_pose.heading.angle())) < theta_grid_size_;
   }
   
   bool Solve(std::vector<CarState> *car_states) {
@@ -357,14 +358,14 @@ public:
           }
           std::reverse(car_states->begin(), car_states->end());
         }
-        PrintPath(curr_node);
+        // PrintPath(curr_node);
         printf("total cost = %lf\n", curr_node->total_cost);
         printf("%llu\n", nodes_.size());
         printf("%d\n", cnt);
         return true;
       }
       for (double signed_curvature = -0.2; signed_curvature < 0.3; signed_curvature += 0.2) {
-        for (double signed_distance = -kXYGridSize * 1.6; signed_distance < kXYGridSize * 2; signed_distance += kXYGridSize * 0.8) {
+        for (double signed_distance = -xy_grid_size_ * 1.6; signed_distance < xy_grid_size_ * 2; signed_distance += xy_grid_size_ * 0.8) {
           if (std::abs(signed_distance) < 0.01) {
             continue;
           }
@@ -384,10 +385,9 @@ public:
     }
     return false;
   }
-  
-  // private:
-  // static constexpr double kXYGridSize = 0.5;
-  // static constexpr double kThetaGridSize = 0.1;
+
+  const double xy_grid_size_;
+  const double theta_grid_size_;
   
   std::priority_queue<DataInQueue, std::vector<DataInQueue>, std::greater<>> queue_;
   std::unordered_map<uint64_t, std::unique_ptr<Node>> nodes_;
@@ -413,7 +413,7 @@ void Pursuit(std::vector<Segment>* obstacle_segments,
   output_states->emplace_back(input_states.front());
   int target_state_index = start_index;
   while (target_state_index < int(input_states.size())) {
-    AStarSolver<0.2, 0.04> astar_solver;
+    AStarSolver astar_solver(0.2, 0.04);
     astar_solver.start_state_ = output_states->back();
     astar_solver.final_state_ = input_states[target_state_index];
     astar_solver.obstacle_segments_ = obstacle_segments;
@@ -431,23 +431,45 @@ void Pursuit(std::vector<Segment>* obstacle_segments,
   }
 }
 
+double GetApproxLength(const std::vector<CarState>& car_states, const CarState &final_state) {
+  double length = 0;
+  for (int i = 0; i + 1 < int(car_states.size()); ++i) {
+    length += car_states[i].car_pose.position.DistanceToPoint(car_states[i + 1].car_pose.position);
+  }
+  if (!car_states.empty()) {
+    length += car_states.back().car_pose.position.DistanceToPoint(final_state.car_pose.position);
+  }
+  return length;
+}
+
+void GenerateFarAwayCase(AStarSolver *astar_solver) {
+  astar_solver->start_state_.car_pose = CarPose(Vec(20, 20), Angle(0));
+  astar_solver->final_state_.car_pose = CarPose(Vec(80, 80), Angle(0));
+  astar_solver->obstacle_segments_->emplace_back(Vec(30, 40), Vec(40, 30));
+}
+
+void GenerateKTurnCase(AStarSolver *astar_solver) {
+  astar_solver->start_state_.car_pose = CarPose(Vec(50, 50), Angle(pi * 0.5));
+  astar_solver->final_state_.car_pose = CarPose(Vec(45, 50), Angle(-pi * 0.5));
+  astar_solver->obstacle_segments_->emplace_back(Vec(42, 0), Vec(42, 100));
+  astar_solver->obstacle_segments_->emplace_back(Vec(53, 0), Vec(53, 100));
+}
+
+void GenerateNarrowRoadCase(AStarSolver *astar_solver) {
+  constexpr double road_width = 3.0;
+  astar_solver->start_state_.car_pose = CarPose(Vec(60, 30), Angle(pi * 0.5));
+  astar_solver->final_state_.car_pose = CarPose(Vec(40, 80), Angle(pi * 0.5));
+  astar_solver->obstacle_segments_->emplace_back(Vec(40 - road_width * 0.5, 50), Vec(40 - road_width * 0.5, 100));
+  astar_solver->obstacle_segments_->emplace_back(Vec(40 + road_width * 0.5, 50), Vec(40 + road_width * 0.5, 100));
+}
+
 int main() {
   BoxTest();
   std::vector<Segment> obstacle_segments = {};
-  // obstacle_segments.emplace_back(Vec(30, 40), Vec(40, 30));
-  AStarSolver<0.5, 0.1> astar_solver;
-  
-  /*
-  astar_solver.start_state_.car_pose = CarPose(Vec(20, 20), Angle(0));
-  astar_solver.final_state_.car_pose = CarPose(Vec(80, 80), Angle(0));
+  AStarSolver astar_solver(0.5, 0.1);
   astar_solver.obstacle_segments_ = &obstacle_segments;
-   */
-  
-  astar_solver.start_state_.car_pose = CarPose(Vec(50, 50), Angle(pi * 0.5));
-  astar_solver.final_state_.car_pose = CarPose(Vec(45, 50), Angle(-pi * 0.5));
-  astar_solver.obstacle_segments_ = &obstacle_segments;
-  obstacle_segments.emplace_back(Vec(42, 0), Vec(42, 100));
-  obstacle_segments.emplace_back(Vec(53, 0), Vec(53, 100));
+
+  GenerateNarrowRoadCase(&astar_solver);
 
   Painter painter;
   painter.AddSegmentWithColor(GetDebugShortSegment(astar_solver.start_state_.car_pose), BLACK);
@@ -458,10 +480,12 @@ int main() {
   std::vector<CarState> car_states = {};
   printf("%d\n", astar_solver.Solve(&car_states));
   PrintPath(&painter, car_states, BLACK);
+  printf("%lf\n", GetApproxLength(car_states, astar_solver.final_state_));
   std::vector<CarState> smooth_states = {};
   car_states.back() = astar_solver.final_state_;
   Pursuit(&obstacle_segments, car_states, &smooth_states, 5, 5);
   PrintPath(&painter, smooth_states, RED);
+  printf("%lf\n", GetApproxLength(smooth_states, astar_solver.final_state_));
   // car_states = std::move(smooth_states);
   // car_states.back() = astar_solver.final_state_;
   // Pursuit(&obstacle_segments, car_states, &smooth_states, 10, 10);
