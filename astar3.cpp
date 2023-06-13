@@ -491,10 +491,20 @@ int main() {
   Pursuit(&obstacle_segments, car_states, &smooth_states, 5, 5);
   PrintPath(&painter, smooth_states, RED);
   printf("%lf\n", GetApproxLength(smooth_states, astar_solver.final_state_));
-  // car_states = std::move(smooth_states);
-  // car_states.back() = astar_solver.final_state_;
-  // Pursuit(&obstacle_segments, car_states, &smooth_states, 10, 10);
-  // PrintPath(&painter, smooth_states, GREEN);
+
+  car_states = std::move(smooth_states);
+  car_states.back() = astar_solver.final_state_;
+  Pursuit(&obstacle_segments, car_states, &smooth_states, 5, 5);
+  PrintPath(&painter, smooth_states, GREEN);
+
+  for (int i = 0; i < 20; ++i) {
+    car_states = std::move(smooth_states);
+    car_states.back() = astar_solver.final_state_;
+    Pursuit(&obstacle_segments, car_states, &smooth_states, 5, 5);
+    printf("%lf\n", GetApproxLength(smooth_states, astar_solver.final_state_));
+  }
+  PrintPath(&painter, smooth_states, BLUE);
+
   painter.Draw();
   return 0;
 }
