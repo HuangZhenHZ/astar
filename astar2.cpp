@@ -526,25 +526,33 @@ std::vector<Vec> SmoothPath(std::vector<Vec> path) {
       slope[i] = Vec(0, 0);
     }
     for (int i = 0; i + 2 < int(path.size()); ++i) {
-      slope[i] += path[i] * 2;
-      slope[i + 1] += path[i + 1] * 8;
-      slope[i + 2] += path[i + 2] * 2;
+      // slope[i] += path[i] * 2;
+      // slope[i + 1] += path[i + 1] * 8;
+      // slope[i + 2] += path[i + 2] * 2;
       
-      slope[i] += path[i + 2] * 2;
-      slope[i + 2] += path[i] * 2;
+      // slope[i] += path[i + 2] * 2;
+      // slope[i + 2] += path[i] * 2;
       
-      slope[i] += path[i + 1] * -4;
-      slope[i + 1] += path[i] * -4;
+      // slope[i] += path[i + 1] * (-4);
+      // slope[i + 1] += path[i] * (-4);
       
-      slope[i + 1] += path[i + 2] * -4;
-      slope[i + 2] += path[i + 1] * -4;
+      // slope[i + 1] += path[i + 2] * (-4);
+      // slope[i + 2] += path[i + 1] * (-4);
+      
+      slope[i] += path[i] * 2 + path[i + 2] * 2 - path[i + 1] * 4;
+      slope[i + 2] += path[i] * 2 + path[i + 2] * 2 - path[i + 1] * 4;
+      slope[i + 1] += path[i + 1] * 8 - path[i] * 4 - path[i + 2] * 4;
     }
     for (int i = 0; i + 1 < int(path.size()); ++i) {
-      slope[i] += (path[i] - path[i + 1]) * 2;
-      slope[i + 1] += (path[i + 1] - path[i]) * 2;
+      slope[i] += (path[i] - path[i + 1]) * 2 * 0.1;
+      slope[i + 1] += (path[i + 1] - path[i]) * 2 * 0.1;
+    }
+    double total_length_sqr = 0;
+    for (int i = 2; i + 2 < int(path.size()); ++i) {
+      total_length_sqr += slope[i].Inner(slope[i]);
     }
     for (int i = 2; i + 2 < int(path.size()); ++i) {
-      path[i] -= slope[i] * 0.05;
+      path[i] -= slope[i] / total_length_sqr;
     }
   }
   return path;
@@ -558,7 +566,7 @@ int main() {
   astar_solver.obstacle_segments_.emplace_back(Vec(30, 40), Vec(40, 30));
   std::vector<Vec> output_path = {};
   printf("%d\n", astar_solver.Solve(&output_path));
-  // PaintPath(&astar_solver.painter_, output_path);
+  PaintPath(&astar_solver.painter_, output_path);
   std::vector<Vec> smooth_path = SmoothPath(output_path);
   PaintPath(&astar_solver.painter_, smooth_path);
   astar_solver.painter_.Draw();
