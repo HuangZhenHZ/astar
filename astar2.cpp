@@ -408,7 +408,7 @@ public:
              node->car_state.car_pose.position.y,
              node->car_state.car_pose.heading.angle(),
              node->g_cost);
-      painter_.EmplaceSegment(last_position, node->car_state.car_pose.position);
+      // painter_.EmplaceSegment(last_position, node->car_state.car_pose.position);
       last_position = node->car_state.car_pose.position;
     }
   }
@@ -422,8 +422,19 @@ public:
     }
     return false;
   }
+  
+  void OutputPath(Node* node, std::vector<Vec>* output_path) {
+    if (output_path == nullptr) {
+      return;
+    }
+    output_path->clear();
+    for (; node; node = node->from_node) {
+      output_path->push_back(node->car_state.car_pose.position);
+    }
+    std::reverse(output_path->begin(), output_path->end());
+  }
 
-  bool Solve() {
+  bool Solve(std::vector<Vec> *output_path) {
     for (const Segment &segment : obstacle_segments_) {
       painter_.EmplaceSegment(segment);
     }
@@ -470,6 +481,7 @@ public:
       if (curr_node->search_layer + 1 == int(search_layers_.size()) &&
           search_layers_.back()->ComputeGridId(curr_node->car_state) == search_layers_.back()->ComputeGridId(final_state_)) {
         PrintPath(curr_node);
+        OutputPath(curr_node, output_path);
         printf("g + h cost = %lf\n", curr_node->g_cost + curr_node->h_cost);
         printf("total cost = %lf\n", curr_node->total_cost);
         printf("%llu\n", nodes_.size());
@@ -501,13 +513,54 @@ public:
   std::unique_ptr<SearchLayerCoarse> search_layer_1_;
 };
 
+void PaintPath(Painter *painter, const std::vector<Vec> &path) {
+  for (int i = 0; i + 1 < int(path.size()); ++i) {
+    painter->EmplaceSegment(path[i], path[i + 1]);
+  }
+}
+
+std::vector<Vec> SmoothPath(std::vector<Vec> path) {
+  for (int t = 0; t < 2000; ++t) {
+    std::vector<Vec> slope(path.size());
+    for (int i = 0; i < int(path.size()); ++i) {
+      slope[i] = Vec(0, 0);
+    }
+    for (int i = 0; i + 2 < int(path.size()); ++i) {
+      slope[i] += path[i] * 2;
+      slope[i + 1] += path[i + 1] * 8;
+      slope[i + 2] += path[i + 2] * 2;
+      
+      slope[i] += path[i + 2] * 2;
+      slope[i + 2] += path[i] * 2;
+      
+      slope[i] += path[i + 1] * -4;
+      slope[i + 1] += path[i] * -4;
+      
+      slope[i + 1] += path[i + 2] * -4;
+      slope[i + 2] += path[i + 1] * -4;
+    }
+    for (int i = 0; i + 1 < int(path.size()); ++i) {
+      slope[i] += (path[i] - path[i + 1]) * 2;
+      slope[i + 1] += (path[i + 1] - path[i]) * 2;
+    }
+    for (int i = 2; i + 2 < int(path.size()); ++i) {
+      path[i] -= slope[i] * 0.05;
+    }
+  }
+  return path;
+}
+
 int main() {
   BoxTest();
   AStarSolver astar_solver;
   astar_solver.start_state_.car_pose = CarPose(Vec(20, 20), Angle(0));
   astar_solver.final_state_.car_pose = CarPose(Vec(80, 80), Angle(0));
   astar_solver.obstacle_segments_.emplace_back(Vec(30, 40), Vec(40, 30));
-  printf("%d\n", astar_solver.Solve());
+  std::vector<Vec> output_path = {};
+  printf("%d\n", astar_solver.Solve(&output_path));
+  // PaintPath(&astar_solver.painter_, output_path);
+  std::vector<Vec> smooth_path = SmoothPath(output_path);
+  PaintPath(&astar_solver.painter_, smooth_path);
   astar_solver.painter_.Draw();
   return 0;
 }
